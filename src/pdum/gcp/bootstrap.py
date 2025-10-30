@@ -4,21 +4,31 @@ This module provides idempotent functionality to create and configure
 a GCP service account with organization-level admin permissions.
 """
 
+import json
 import subprocess
+from pathlib import Path
 from typing import Optional
 
+import yaml
 from InquirerPy import inquirer
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
-from rich.table import Table
 
 # --- Configuration ---
-CUSTOM_CONFIG_KEY = "bootstrap/bot_project_id"
-BOT_PROJECT_PREFIX = "my-org-admin-bots"
+BOT_PROJECT_PREFIX = "h-papadum-admin"
 BOT_SA_NAME = "admin-robot"
 
 console = Console()
+
+# Global verbose flag
+_verbose = False
+
+
+def set_verbose(enabled: bool) -> None:
+    """Set global verbose flag."""
+    global _verbose
+    _verbose = enabled
 
 
 class GCloudError(Exception):
@@ -37,20 +47,34 @@ def run_gcloud(args: list[str], check: bool = True, capture: bool = True) -> Opt
 
     Returns:
         Command stdout if capture=True, None otherwise
+        Returns None if check=False and command failed
 
     Raises:
         GCloudError: If command fails and check=True
     """
     cmd = ["gcloud"] + args
+
+    # Print command in verbose mode
+    if _verbose:
+        console.print(f"[dim]$ {' '.join(cmd)}[/dim]")
+
     try:
         result = subprocess.run(
             cmd,
-            check=check,
+            check=False,  # Never let subprocess raise, we handle errors ourselves
             capture_output=capture,
             text=True,
         )
+
+        # Check if command failed
+        if result.returncode != 0:
+            if check:
+                raise GCloudError(f"Command failed: {' '.join(cmd)}\n{result.stderr}")
+            return None
+
         return result.stdout.strip() if capture else None
     except subprocess.CalledProcessError as e:
+        # This shouldn't happen since check=False above, but keep for safety
         if check:
             raise GCloudError(f"Command failed: {' '.join(cmd)}\n{e.stderr}") from e
         return None
@@ -66,8 +90,19 @@ def get_config_value(key: str) -> Optional[str]:
 
 
 def set_config_value(key: str, value: str) -> None:
-    """Set a value in gcloud config."""
-    run_gcloud(["config", "set", key, value], capture=False)
+    """Set a value in gcloud config.
+
+    This is a best-effort operation - if it fails, we continue anyway.
+    """
+    try:
+        run_gcloud(["config", "set", key, value], capture=False)
+    except GCloudError:
+        # Some gcloud configurations don't support custom properties
+        # This is non-critical, so we just log and continue
+        console.print(
+            f"[dim]Note: Could not save {key} to config "
+            "(custom properties may not be supported)[/dim]"
+        )
 
 
 def get_active_config() -> str:
@@ -82,10 +117,13 @@ def get_active_config() -> str:
     return result
 
 
-def activate_config(config_name: str) -> None:
+def activate_config(config_name: str, dry_run: bool = False) -> None:
     """Activate a gcloud configuration."""
-    console.print(f"[cyan]Activating config:[/cyan] {config_name}")
-    run_gcloud(["config", "configurations", "activate", config_name], capture=False)
+    if dry_run:
+        console.print(f"[dim][DRY RUN] Would activate config: {config_name}[/dim]")
+    else:
+        console.print(f"[cyan]Activating config:[/cyan] {config_name}")
+        run_gcloud(["config", "configurations", "activate", config_name], capture=False)
 
 
 def restore_config(original_config: str, original_project: Optional[str], dry_run: bool = False) -> None:
@@ -97,7 +135,7 @@ def restore_config(original_config: str, original_project: Optional[str], dry_ru
             console.print(f"[dim][DRY RUN] Would restore project: {original_project}[/dim]")
     else:
         console.print(f"[cyan]Restoring original gcloud config:[/cyan] {original_config}")
-        activate_config(original_config)
+        activate_config(original_config, dry_run=False)
         if original_project:
             set_config_value("project", original_project)
     console.print("[green]Bootstrap complete.[/green]")
@@ -134,6 +172,14 @@ def choose_config() -> str:
     if not configs:
         raise GCloudError("No gcloud configurations found. Please create one first.")
 
+    # If only one config, auto-select it
+    if len(configs) == 1:
+        config = configs[0]
+        name = config.get("name", "")
+        account = config.get("properties", {}).get("core", {}).get("account", "no account")
+        console.print(f"[cyan]Using only available config:[/cyan] {name} ({account})")
+        return name
+
     # Format choices with additional info
     choices = []
     for config in configs:
@@ -156,10 +202,10 @@ def choose_config() -> str:
 
 
 def get_billing_accounts() -> list[dict[str, str]]:
-    """Get list of available billing accounts.
+    """Get list of available billing accounts (open only).
 
     Returns:
-        List of dicts with billing account info
+        List of dicts with billing account info (only open accounts)
     """
     output = run_gcloud([
         "billing",
@@ -172,7 +218,10 @@ def get_billing_accounts() -> list[dict[str, str]]:
 
     import json
     accounts = json.loads(output)
-    return accounts
+
+    # Filter to only include open accounts
+    open_accounts = [acc for acc in accounts if acc.get("open", False)]
+    return open_accounts
 
 
 def choose_billing_account() -> str:
@@ -184,16 +233,23 @@ def choose_billing_account() -> str:
     accounts = get_billing_accounts()
 
     if not accounts:
-        raise GCloudError("No billing accounts found. You need at least one billing account.")
+        raise GCloudError("No open billing accounts found. You need at least one open billing account.")
+
+    # If only one account, auto-select it
+    if len(accounts) == 1:
+        account = accounts[0]
+        name = account.get("displayName", "")
+        account_id = account.get("name", "").replace("billingAccounts/", "")
+        console.print(f"[cyan]Using only available billing account:[/cyan] {name} ({account_id})")
+        return account_id
 
     # Format choices with additional info
     choices = []
     for account in accounts:
         name = account.get("displayName", "")
         account_id = account.get("name", "").replace("billingAccounts/", "")
-        open_status = "OPEN" if account.get("open", False) else "CLOSED"
         choices.append({
-            "name": f"{name} ({account_id}) [{open_status}]",
+            "name": f"{name} ({account_id})",
             "value": account_id,
         })
 
@@ -239,6 +295,14 @@ def choose_organization() -> Optional[str]:
         )
         return None
 
+    # If only one org, auto-select it
+    if len(orgs) == 1:
+        org = orgs[0]
+        name = org.get("displayName", "")
+        org_id = org.get("name", "").replace("organizations/", "")
+        console.print(f"[cyan]Using only available organization:[/cyan] {name} ({org_id})")
+        return org_id
+
     # Format choices with additional info
     choices = []
     for org in orgs:
@@ -265,27 +329,38 @@ def get_or_create_automation_folder(org_id: str, dry_run: bool = False) -> Optio
         dry_run: If True, don't actually create anything
 
     Returns:
-        The folder ID, or None if dry run
+        The folder ID, or None if dry run or no permissions
     """
     console.print("[cyan]Checking for Automation folder...[/cyan]")
 
-    # Search for existing folder
-    output = run_gcloud([
-        "resource-manager",
-        "folders",
-        "list",
-        f"--organization={org_id}",
-        "--filter=displayName:Automation",
-        "--format=json",
-    ])
+    # Try to search for existing folder
+    try:
+        output = run_gcloud([
+            "resource-manager",
+            "folders",
+            "list",
+            f"--organization={org_id}",
+            "--filter=displayName:Automation",
+            "--format=json",
+        ])
 
-    if output:
-        import json
-        folders = json.loads(output)
-        if folders:
-            folder_id = folders[0].get("name", "").replace("folders/", "")
-            console.print(f"[green]Found existing Automation folder:[/green] {folder_id}")
-            return folder_id
+        if output:
+            import json
+            folders = json.loads(output)
+            if folders:
+                folder_id = folders[0].get("name", "").replace("folders/", "")
+                console.print(f"[green]Found existing Automation folder:[/green] {folder_id}")
+                return folder_id
+    except GCloudError as e:
+        # Check if it's a permission error
+        if "PERMISSION_DENIED" in str(e) or "does not have permission" in str(e):
+            console.print(
+                "[yellow]No permission to list folders. "
+                "Skipping Automation folder - will create project directly in org.[/yellow]"
+            )
+            return None
+        # Re-raise if it's a different error
+        raise
 
     # Create folder if it doesn't exist
     if dry_run:
@@ -293,21 +368,32 @@ def get_or_create_automation_folder(org_id: str, dry_run: bool = False) -> Optio
         return None
 
     console.print("[yellow]Creating Automation folder...[/yellow]")
-    output = run_gcloud([
-        "resource-manager",
-        "folders",
-        "create",
-        "--display-name=Automation",
-        f"--organization={org_id}",
-        "--format=json",
-    ])
+    try:
+        output = run_gcloud([
+            "resource-manager",
+            "folders",
+            "create",
+            "--display-name=Automation",
+            f"--organization={org_id}",
+            "--format=json",
+        ])
 
-    if output:
-        import json
-        folder_data = json.loads(output)
-        folder_id = folder_data.get("name", "").replace("folders/", "")
-        console.print(f"[green]Created Automation folder:[/green] {folder_id}")
-        return folder_id
+        if output:
+            import json
+            folder_data = json.loads(output)
+            folder_id = folder_data.get("name", "").replace("folders/", "")
+            console.print(f"[green]Created Automation folder:[/green] {folder_id}")
+            return folder_id
+    except GCloudError as e:
+        # Check if it's a permission error
+        if "PERMISSION_DENIED" in str(e) or "does not have permission" in str(e):
+            console.print(
+                "[yellow]No permission to create folders. "
+                "Will create project directly in org.[/yellow]"
+            )
+            return None
+        # Re-raise if it's a different error
+        raise
 
     raise GCloudError("Failed to create Automation folder")
 
@@ -319,53 +405,36 @@ def generate_random_hex(length: int = 4) -> str:
     return secrets.token_hex(length)
 
 
-def determine_bot_project_id(dry_run: bool = False) -> str:
+def determine_bot_project_id() -> str:
     """Determine or generate the bot project ID (idempotent).
-
-    Args:
-        dry_run: If True, don't save to config
 
     Returns:
         The bot project ID to use
     """
     console.print("\n[yellow]--- Step 0: Determine Bot Project ID ---[/yellow]")
 
-    # Try to read from config
-    bot_project_id = get_config_value(CUSTOM_CONFIG_KEY)
-
-    if bot_project_id:
-        console.print(f"[green]Found project ID in config:[/green] {bot_project_id}")
-        return bot_project_id
-
     console.print(
-        f"[yellow]No ID in config. Searching for existing project "
-        f"with prefix '{BOT_PROJECT_PREFIX}-*'[/yellow]"
+        f"[cyan]Searching for existing project with prefix '{BOT_PROJECT_PREFIX}-*'[/cyan]"
     )
 
-    # Search for existing project
+    # Search for existing project using regex filter
+    # Note: ~ is for regex matching in gcloud filters
     existing_id = run_gcloud([
         "projects",
         "list",
-        f"--filter=projectId:{BOT_PROJECT_PREFIX}-*",
+        f"--filter=projectId ~ ^{BOT_PROJECT_PREFIX}-.*",
         "--limit=1",
         "--format=value(projectId)",
     ])
 
     if existing_id:
         console.print(f"[green]Found existing project:[/green] {existing_id}")
-        bot_project_id = existing_id
-    else:
-        console.print("[yellow]No existing project found. Generating new ID.[/yellow]")
-        random_hex = generate_random_hex(4)
-        bot_project_id = f"{BOT_PROJECT_PREFIX}-{random_hex}"
-        console.print(f"[cyan]New project ID will be:[/cyan] {bot_project_id}")
+        return existing_id
 
-    # Save to config
-    if dry_run:
-        console.print(f"[dim][DRY RUN] Would save project ID to config key '{CUSTOM_CONFIG_KEY}'[/dim]")
-    else:
-        console.print(f"[cyan]Saving project ID to config key '{CUSTOM_CONFIG_KEY}'[/cyan]")
-        set_config_value(CUSTOM_CONFIG_KEY, bot_project_id)
+    console.print("[yellow]No existing project found. Generating new ID.[/yellow]")
+    random_hex = generate_random_hex(4)
+    bot_project_id = f"{BOT_PROJECT_PREFIX}-{random_hex}"
+    console.print(f"[cyan]New project ID will be:[/cyan] {bot_project_id}")
 
     return bot_project_id
 
@@ -461,8 +530,7 @@ def create_project(
             "projects",
             "create",
             project_id,
-            "--name=[Admin] Service Bots",
-            "--no-activate",
+            "--name=Admin Service Bots",
         ]
 
         if folder_id:
@@ -474,6 +542,69 @@ def create_project(
         run_gcloud(args, capture=False)
 
     console.print("[green]Project created.[/green]")
+
+
+def add_project_owner(project_id: str, email: str, dry_run: bool = False) -> None:
+    """Add a user as owner of the project (idempotent).
+
+    Args:
+        project_id: The project ID
+        email: The email address to add as owner
+        dry_run: If True, don't actually add
+    """
+    console.print("\n[yellow]--- Step 1.5: Add Project Owner ---[/yellow]")
+
+    if dry_run:
+        console.print(f"[dim][DRY RUN] Would add {email} as owner of {project_id}[/dim]")
+        return
+
+    # Check if user already has owner role
+    console.print(f"[cyan]Checking if {email} is already an owner...[/cyan]")
+
+    try:
+        # Get current IAM policy
+        policy_output = run_gcloud([
+            "projects",
+            "get-iam-policy",
+            project_id,
+            "--format=json",
+        ])
+
+        if policy_output:
+            import json
+            policy = json.loads(policy_output)
+            bindings = policy.get("bindings", [])
+
+            # Check if user already has owner role
+            for binding in bindings:
+                if binding.get("role") == "roles/owner":
+                    members = binding.get("members", [])
+                    if f"user:{email}" in members:
+                        console.print(
+                            f"[green]{email} is already an owner of {project_id}. Skipping.[/green]"
+                        )
+                        return
+    except GCloudError:
+        # If we can't get the policy, we'll try to add anyway
+        console.print("[yellow]Could not check existing policy, will attempt to add owner role.[/yellow]")
+
+    # Add owner role
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        progress.add_task(description=f"Adding {email} as owner...", total=None)
+
+        run_gcloud([
+            "projects",
+            "add-iam-policy-binding",
+            project_id,
+            f"--member=user:{email}",
+            "--role=roles/owner",
+        ])
+
+    console.print(f"[green]{email} added as owner of {project_id}.[/green]")
 
 
 def link_billing_account(project_id: str, billing_id: str, dry_run: bool = False) -> None:
@@ -648,11 +779,144 @@ def grant_iam_roles(org_id: Optional[str], sa_email: str, dry_run: bool = False)
     console.print("[green]All roles granted.[/green]")
 
 
+def get_config_dir(config_name: str) -> Path:
+    """Get the configuration directory path for a given config.
+
+    Args:
+        config_name: The gcloud configuration name
+
+    Returns:
+        Path to the config directory
+    """
+    home = Path.home()
+    config_dir = home / ".config" / "gcloud" / "pdum_gcp" / config_name
+    return config_dir
+
+
+def get_current_account_email() -> str:
+    """Get the email address of the currently active gcloud account.
+
+    Returns:
+        The email address
+    """
+    email = get_config_value("core/account")
+    if not email:
+        raise GCloudError("Could not determine current account email")
+    return email
+
+
+def save_config_file(
+    config_name: str,
+    bot_email: str,
+    trusted_humans: list[str],
+    dry_run: bool = False
+) -> Path:
+    """Save configuration to YAML file.
+
+    Args:
+        config_name: The gcloud configuration name
+        bot_email: The admin bot email address
+        trusted_humans: List of trusted human email addresses
+        dry_run: If True, only simulate
+
+    Returns:
+        Path to the saved config file
+    """
+    config_dir = get_config_dir(config_name)
+    config_file = config_dir / "config.yaml"
+
+    config_data = {
+        "admin_bot": bot_email,
+        "trusted_humans": trusted_humans,
+    }
+
+    if dry_run:
+        console.print(f"[dim][DRY RUN] Would create config directory: {config_dir}[/dim]")
+        console.print(f"[dim][DRY RUN] Would save config to: {config_file}[/dim]")
+        console.print(f"[dim][DRY RUN] Config data: {config_data}[/dim]")
+        return config_file
+
+    # Create directory if it doesn't exist
+    config_dir.mkdir(parents=True, exist_ok=True)
+    console.print(f"[cyan]Created config directory:[/cyan] {config_dir}")
+
+    # Write YAML file
+    with open(config_file, "w") as f:
+        yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
+
+    console.print(f"[green]Saved configuration to:[/green] {config_file}")
+    return config_file
+
+
+def download_service_account_key(
+    config_name: str,
+    sa_email: str,
+    project_id: str,
+    dry_run: bool = False
+) -> Optional[Path]:
+    """Download service account key to admin.json.
+
+    Args:
+        config_name: The gcloud configuration name
+        sa_email: The service account email
+        project_id: The project ID
+        dry_run: If True, only simulate
+
+    Returns:
+        Path to the key file, or None if dry run
+    """
+    console.print("\n[yellow]--- Step 5: Download Service Account Key ---[/yellow]")
+
+    config_dir = get_config_dir(config_name)
+    key_file = config_dir / "admin.json"
+
+    if dry_run:
+        console.print(f"[dim][DRY RUN] Would download SA key to: {key_file}[/dim]")
+        return None
+
+    # Ensure directory exists
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    # Check if key already exists
+    if key_file.exists():
+        console.print(
+            f"[yellow]Key file already exists at {key_file}. "
+            "Delete it manually if you want to regenerate.[/yellow]"
+        )
+        return key_file
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        progress.add_task(description="Downloading service account key...", total=None)
+
+        run_gcloud([
+            "iam",
+            "service-accounts",
+            "keys",
+            "create",
+            str(key_file),
+            f"--iam-account={sa_email}",
+            f"--project={project_id}",
+        ], capture=False)
+
+    console.print(f"[green]Service account key saved to:[/green] {key_file}")
+    console.print(
+        "[bold yellow]WARNING:[/bold yellow] Keep this key file secure! "
+        "It grants admin access to your GCP organization."
+    )
+
+    return key_file
+
+
 def bootstrap(
     config_name: Optional[str] = None,
     billing_id: Optional[str] = None,
     org_id: Optional[str] = None,
     dry_run: bool = False,
+    verbose: bool = False,
 ) -> None:
     """Bootstrap a super-admin service account for GCP automation.
 
@@ -663,10 +927,14 @@ def bootstrap(
         billing_id: The billing account ID (interactive if not provided)
         org_id: The organization ID (interactive if not provided)
         dry_run: If True, show what would be done without making changes
+        verbose: If True, print all gcloud commands
 
     Raises:
         GCloudError: If any gcloud command fails
     """
+    # Set verbose mode
+    set_verbose(verbose)
+
     # Save original state
     original_config = get_active_config()
     original_project = get_config_value("core/project")
@@ -677,7 +945,7 @@ def bootstrap(
             config_name = choose_config()
 
         # Activate target config
-        activate_config(config_name)
+        activate_config(config_name, dry_run=dry_run)
 
         # Interactive organization selection if not provided
         if not org_id:
@@ -710,11 +978,17 @@ def bootstrap(
             )
 
         # Determine bot project ID
-        bot_project_id = determine_bot_project_id(dry_run=dry_run)
+        bot_project_id = determine_bot_project_id()
         sa_email = f"{BOT_SA_NAME}@{bot_project_id}.iam.gserviceaccount.com"
+
+        # Get current user's email for trusted humans list
+        current_user_email = get_current_account_email()
 
         # Create project in Automation folder
         create_project(bot_project_id, org_id, folder_id=folder_id, dry_run=dry_run)
+
+        # Add trusted human as project owner
+        add_project_owner(bot_project_id, current_user_email, dry_run=dry_run)
 
         # Link billing
         link_billing_account(bot_project_id, billing_id, dry_run=dry_run)
@@ -725,16 +999,42 @@ def bootstrap(
         # Grant IAM roles
         grant_iam_roles(org_id, sa_email, dry_run=dry_run)
 
+        # Save configuration file
+        console.print("\n[yellow]--- Saving Configuration ---[/yellow]")
+        config_file = save_config_file(
+            config_name=config_name,
+            bot_email=sa_email,
+            trusted_humans=[current_user_email],
+            dry_run=dry_run,
+        )
+
+        # Download service account key (not in dry-run)
+        key_file = download_service_account_key(
+            config_name=config_name,
+            sa_email=sa_email,
+            project_id=bot_project_id,
+            dry_run=dry_run,
+        )
+
         # Success summary
         status_text = "Dry Run Complete!" if dry_run else "Bootstrap Successful!"
         border_color = "yellow" if dry_run else "green"
+
+        summary_lines = [
+            f"[bold {'yellow' if dry_run else 'green'}]{status_text}[/bold {'yellow' if dry_run else 'green'}]\n",
+            f"Project ID: {bot_project_id}",
+            f"Service Account: {sa_email}",
+            f"Organization: {org_id or 'N/A (personal account)'}",
+            f"Folder: {folder_id or 'N/A'}",
+            f"Config File: {config_file}",
+        ]
+
+        if key_file and not dry_run:
+            summary_lines.append(f"Key File: {key_file}")
+
         console.print(
             Panel.fit(
-                f"[bold {'yellow' if dry_run else 'green'}]{status_text}[/bold {'yellow' if dry_run else 'green'}]\n\n"
-                f"Project ID: {bot_project_id}\n"
-                f"Service Account: {sa_email}\n"
-                f"Organization: {org_id or 'N/A (personal account)'}\n"
-                f"Folder: {folder_id or 'N/A'}",
+                "\n".join(summary_lines),
                 border_style=border_color,
             )
         )

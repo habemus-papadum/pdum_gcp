@@ -47,6 +47,12 @@ def bootstrap(
         "-n",
         help="Show what would be done without making changes",
     ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Print all gcloud commands",
+    ),
 ):
     """
     Bootstrap a super-admin service account for GCP automation.
@@ -69,6 +75,9 @@ def bootstrap(
 
         # Dry run to see what would happen
         pdum_gcp bootstrap --dry-run
+
+        # Verbose mode to see all gcloud commands
+        pdum_gcp bootstrap --verbose
     """
     try:
         bootstrap_module.bootstrap(
@@ -76,6 +85,7 @@ def bootstrap(
             billing_id=billing_id,
             org_id=org_id,
             dry_run=dry_run,
+            verbose=verbose,
         )
     except bootstrap_module.GCloudError as e:
         console.print(f"[bold red]Error:[/bold red] {e}")

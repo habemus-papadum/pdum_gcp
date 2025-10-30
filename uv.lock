@@ -619,6 +619,7 @@ version = "0.1.0a0"
 source = { editable = "." }
 dependencies = [
     { name = "google-cloud" },
+    { name = "pyyaml" },
     { name = "rich" },
     { name = "typer" },
 ]
@@ -647,6 +648,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "google-cloud", specifier = ">=0.34.0" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "rich", specifier = ">=14.2.0" },
     { name = "typer", specifier = ">=0.20.0" },
 ]
