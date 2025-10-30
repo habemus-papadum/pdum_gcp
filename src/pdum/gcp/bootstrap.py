@@ -67,13 +67,14 @@ class GCloudError(Exception):
     pass
 
 
-def run_gcloud(args: list[str], check: bool = True, capture: bool = True) -> Optional[str]:
+def run_gcloud(args: list[str], check: bool = True, capture: bool = True, config: Optional[str] = None) -> Optional[str]:
     """Run a gcloud command and return output.
 
     Args:
         args: List of arguments to pass to gcloud
         check: If True, raise exception on non-zero exit code
         capture: If True, capture and return stdout
+        config: Optional gcloud configuration name to use with --configuration flag
 
     Returns:
         Command stdout if capture=True, None otherwise
@@ -82,7 +83,13 @@ def run_gcloud(args: list[str], check: bool = True, capture: bool = True) -> Opt
     Raises:
         GCloudError: If command fails and check=True
     """
-    cmd = ["gcloud"] + args
+    cmd = ["gcloud"]
+
+    # Add --configuration flag if config is specified
+    if config:
+        cmd.extend(["--configuration", config])
+
+    cmd.extend(args)
 
     # Print command in verbose mode
     if _verbose:
@@ -949,116 +956,110 @@ def bootstrap(
     # Set verbose mode
     set_verbose(verbose)
 
-    # Save original state
-    original_config = get_active_config()
-    original_project = get_config_value("core/project")
+    # Interactive config selection if not provided
+    if not config_name:
+        config_name = choose_config()
 
-    try:
-        # Interactive config selection if not provided
-        if not config_name:
-            config_name = choose_config()
+    # Interactive organization selection if not provided
+    if not org_id:
+        org_id = choose_organization()
 
-        # Activate target config
-        activate_config(config_name, dry_run=dry_run)
+    # Interactive billing selection if not provided
+    if not billing_id:
+        billing_id = choose_billing_account()
 
-        # Interactive organization selection if not provided
-        if not org_id:
-            org_id = choose_organization()
+    # Determine mode: "organization" if org_id exists, otherwise "personal"
+    mode = "organization" if org_id else "personal"
 
-        # Interactive billing selection if not provided
-        if not billing_id:
-            billing_id = choose_billing_account()
+    # Display header
+    mode_text = " [DRY RUN]" if dry_run else ""
+    org_text = org_id if org_id else "None (personal account)"
+    console.print(
+        Panel.fit(
+            f"[bold cyan]GCP Bootstrap - Super Admin Service Account{mode_text}[/bold cyan]\n"
+            f"Config: {config_name}\n"
+            f"Mode: {mode}\n"
+            f"Organization: {org_text}\n"
+            f"Billing: {billing_id}",
+            border_style="cyan" if not dry_run else "yellow",
+        )
+    )
 
-        # Display header
-        mode_text = " [DRY RUN]" if dry_run else ""
-        org_text = org_id if org_id else "None (personal account)"
+    # Get or create Automation folder (only if org exists)
+    folder_id = None
+    if org_id:
+        folder_id = get_or_create_automation_folder(org_id, dry_run=dry_run)
+    else:
         console.print(
-            Panel.fit(
-                f"[bold cyan]GCP Bootstrap - Super Admin Service Account{mode_text}[/bold cyan]\n"
-                f"Config: {config_name}\n"
-                f"Organization: {org_text}\n"
-                f"Billing: {billing_id}",
-                border_style="cyan" if not dry_run else "yellow",
-            )
+            "[yellow]No organization - skipping Automation folder creation.[/yellow]"
         )
 
-        # Get or create Automation folder (only if org exists)
-        folder_id = None
-        if org_id:
-            folder_id = get_or_create_automation_folder(org_id, dry_run=dry_run)
-        else:
-            console.print(
-                "[yellow]No organization - skipping Automation folder creation.[/yellow]"
-            )
+    # Determine bot project ID
+    bot_project_id = determine_bot_project_id()
+    sa_email = f"{BOT_SA_NAME}@{bot_project_id}.iam.gserviceaccount.com"
 
-        # Determine bot project ID
-        bot_project_id = determine_bot_project_id()
-        sa_email = f"{BOT_SA_NAME}@{bot_project_id}.iam.gserviceaccount.com"
+    # Get current user's email for trusted humans list
+    current_user_email = get_current_account_email()
 
-        # Get current user's email for trusted humans list
-        current_user_email = get_current_account_email()
+    # Create project in Automation folder
+    create_project(bot_project_id, org_id, folder_id=folder_id, dry_run=dry_run)
 
-        # Create project in Automation folder
-        create_project(bot_project_id, org_id, folder_id=folder_id, dry_run=dry_run)
+    # Add trusted human as project owner
+    add_project_owner(bot_project_id, current_user_email, dry_run=dry_run)
 
-        # Add trusted human as project owner
-        add_project_owner(bot_project_id, current_user_email, dry_run=dry_run)
+    # Link billing
+    link_billing_account(bot_project_id, billing_id, dry_run=dry_run)
 
-        # Link billing
-        link_billing_account(bot_project_id, billing_id, dry_run=dry_run)
+    # Enable required APIs
+    enable_required_apis(bot_project_id, dry_run=dry_run)
 
-        # Enable required APIs
-        enable_required_apis(bot_project_id, dry_run=dry_run)
+    # Create service account
+    create_service_account(bot_project_id, dry_run=dry_run)
 
-        # Create service account
-        create_service_account(bot_project_id, dry_run=dry_run)
+    # Grant IAM roles
+    grant_iam_roles(org_id, sa_email, dry_run=dry_run)
 
-        # Grant IAM roles
-        grant_iam_roles(org_id, sa_email, dry_run=dry_run)
+    # Grant billing account access
+    grant_billing_account_access(billing_id, sa_email, dry_run=dry_run)
 
-        # Grant billing account access
-        grant_billing_account_access(billing_id, sa_email, dry_run=dry_run)
+    # Save configuration file
+    console.print("\n[yellow]--- Saving Configuration ---[/yellow]")
+    config_file = save_config_file(
+        config_name=config_name,
+        bot_email=sa_email,
+        trusted_humans=[current_user_email],
+        mode=mode,
+        dry_run=dry_run,
+    )
 
-        # Save configuration file
-        console.print("\n[yellow]--- Saving Configuration ---[/yellow]")
-        config_file = save_config_file(
-            config_name=config_name,
-            bot_email=sa_email,
-            trusted_humans=[current_user_email],
-            dry_run=dry_run,
+    # Download service account key (not in dry-run)
+    key_file = download_service_account_key(
+        config_name=config_name,
+        sa_email=sa_email,
+        project_id=bot_project_id,
+        dry_run=dry_run,
+    )
+
+    # Success summary
+    status_text = "Dry Run Complete!" if dry_run else "Bootstrap Successful!"
+    border_color = "yellow" if dry_run else "green"
+
+    summary_lines = [
+        f"[bold {'yellow' if dry_run else 'green'}]{status_text}[/bold {'yellow' if dry_run else 'green'}]\n",
+        f"Project ID: {bot_project_id}",
+        f"Service Account: {sa_email}",
+        f"Mode: {mode}",
+        f"Organization: {org_id or 'N/A (personal account)'}",
+        f"Folder: {folder_id or 'N/A'}",
+        f"Config File: {config_file}",
+    ]
+
+    if key_file and not dry_run:
+        summary_lines.append(f"Key File: {key_file}")
+
+    console.print(
+        Panel.fit(
+            "\n".join(summary_lines),
+            border_style=border_color,
         )
-
-        # Download service account key (not in dry-run)
-        key_file = download_service_account_key(
-            config_name=config_name,
-            sa_email=sa_email,
-            project_id=bot_project_id,
-            dry_run=dry_run,
-        )
-
-        # Success summary
-        status_text = "Dry Run Complete!" if dry_run else "Bootstrap Successful!"
-        border_color = "yellow" if dry_run else "green"
-
-        summary_lines = [
-            f"[bold {'yellow' if dry_run else 'green'}]{status_text}[/bold {'yellow' if dry_run else 'green'}]\n",
-            f"Project ID: {bot_project_id}",
-            f"Service Account: {sa_email}",
-            f"Organization: {org_id or 'N/A (personal account)'}",
-            f"Folder: {folder_id or 'N/A'}",
-            f"Config File: {config_file}",
-        ]
-
-        if key_file and not dry_run:
-            summary_lines.append(f"Key File: {key_file}")
-
-        console.print(
-            Panel.fit(
-                "\n".join(summary_lines),
-                border_style=border_color,
-            )
-        )
-
-    finally:
-        # Always restore original config
-        restore_config(original_config, original_project, dry_run=dry_run)
+    )

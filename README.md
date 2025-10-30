@@ -66,6 +66,39 @@ If you want to continue using this tool but reduce risk:
 - 📦 **Layered Architecture**: Clear separation between bootstrap (CLI-based) and automation (API-based) layers
 - 🔒 **Secure Credential Storage**: Local configuration management in `~/.config/gcloud/pdum_gcp/`
 - 🔄 **Idempotent Operations**: All commands can be safely re-run without side effects
+- 🏢 **Personal & Organization Modes**: Automatic detection and handling of GCP account types
+
+## Personal vs Organization Mode
+
+`pdum_gcp` automatically detects and adapts to two different GCP account types:
+
+### Organization Mode
+
+**When you have a GCP Organization:**
+- Admin bots get organization-level permissions (Organization Admin, Billing Admin)
+- Projects can be created in folders within the organization hierarchy
+- Service accounts can create projects via Python API (with organization as parent)
+- Full automation capabilities
+
+**Use Case:** Enterprise accounts, companies, teams with formal GCP organization structure
+
+### Personal Mode
+
+**When you have a personal Gmail/Workspace account without an organization:**
+- Admin bots are created but don't get organization-level permissions (no org to attach to)
+- Projects are created at root level (no folders available)
+- Service accounts cannot create projects (GCP limitation) - uses gcloud CLI with human credentials instead
+- Limited automation but still functional for project management
+
+**Use Case:** Individual developers, personal projects, learning/experimentation
+
+### How Mode is Determined
+
+Mode is automatically detected during bootstrap:
+- **Organization mode**: If `--org` is provided or an organization is detected
+- **Personal mode**: If no organization is found
+
+The mode is saved to `~/.config/gcloud/pdum_gcp/<config>/config.yaml` and used by the Python API to determine the correct approach for operations like project creation.
 
 ## Architecture
 
@@ -400,6 +433,7 @@ Each gcloud config has its own directory under `~/.config/gcloud/pdum_gcp/`:
 ### config.yaml Format
 
 ```yaml
+mode: personal  # or "organization"
 admin_bot: admin-robot@h-papadum-admin-abc123.iam.gserviceaccount.com
 trusted_humans:
   - user@example.com

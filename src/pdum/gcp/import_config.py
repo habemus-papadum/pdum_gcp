@@ -121,12 +121,32 @@ def import_bootstrap_config(
     # Get current user's email for trusted humans list
     current_user_email = get_current_account_email()
 
+    # Detect mode by checking if project has an organization parent
+    console.print("[cyan]Detecting mode (personal vs organization)...[/cyan]")
+    try:
+        # Get project ancestors to determine if it's in an organization
+        ancestors_output = run_gcloud([
+            "projects",
+            "get-ancestors",
+            bot_project_id,
+            "--format=value(type)",
+        ])
+        # If ancestors include "organization", it's organization mode
+        has_org = "organization" in ancestors_output.lower() if ancestors_output else False
+        mode = "organization" if has_org else "personal"
+        console.print(f"[green]Detected mode:[/green] {mode}")
+    except Exception:
+        # Default to personal if we can't determine
+        mode = "personal"
+        console.print(f"[yellow]Could not detect mode, defaulting to:[/yellow] {mode}")
+
     # Save configuration file
     console.print("\n[yellow]--- Saving Configuration ---[/yellow]")
     config_file = save_config_file(
         config_name=config_name,
         bot_email=sa_email,
         trusted_humans=[current_user_email],
+        mode=mode,
         dry_run=False,
     )
 
@@ -144,6 +164,7 @@ def import_bootstrap_config(
             "[bold green]Import Successful![/bold green]\n\n"
             f"Project ID: {bot_project_id}\n"
             f"Service Account: {sa_email}\n"
+            f"Mode: {mode}\n"
             f"Config File: {config_file}\n"
             f"Key File: {key_file}",
             border_style="green",

@@ -95,6 +95,7 @@ def save_config_file(
     config_name: str,
     bot_email: str,
     trusted_humans: list[str],
+    mode: str,
     dry_run: bool = False
 ) -> Path:
     """Save configuration to YAML file.
@@ -103,6 +104,7 @@ def save_config_file(
         config_name: The gcloud configuration name
         bot_email: The admin bot email address
         trusted_humans: List of trusted human email addresses
+        mode: Either "personal" or "organization"
         dry_run: If True, only simulate
 
     Returns:
@@ -112,6 +114,7 @@ def save_config_file(
     config_file = config_dir / "config.yaml"
 
     config_data = {
+        "mode": mode,
         "admin_bot": bot_email,
         "trusted_humans": trusted_humans,
     }

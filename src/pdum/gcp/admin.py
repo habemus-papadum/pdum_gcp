@@ -4,6 +4,7 @@ This module provides the foundation for Phase 2 of the architecture - using
 the Python GCP API with admin bot credentials to perform automated operations.
 """
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -78,6 +79,11 @@ class AdminCredentials:
     config_name: str
     config_data: dict
     google_cloud_credentials: service_account.Credentials
+
+    @property
+    def mode(self) -> str:
+        """Get the mode (personal or organization)."""
+        return self.config_data.get("mode", "personal")
 
     @property
     def admin_bot_email(self) -> str:
@@ -303,29 +309,113 @@ class AdminCredentials:
             # when a project doesn't exist (for security reasons)
             pass
 
-        # Create new project
-        try:
-            request = resourcemanager_v3.CreateProjectRequest(
-                project=resourcemanager_v3.Project(
-                    project_id=project_id,
-                    display_name=display_name,
-                    labels={"managed-by": "pdum_gcp"},
+        # Create new project - use different approach based on mode
+        if self.mode == "personal":
+            # Personal mode: Use gcloud CLI (service accounts can't create projects without parent)
+            return self._create_project_with_gcloud(project_id, display_name)
+        else:
+            # Organization mode: Use Python API
+            try:
+                request = resourcemanager_v3.CreateProjectRequest(
+                    project=resourcemanager_v3.Project(
+                        project_id=project_id,
+                        display_name=display_name,
+                        labels={"managed-by": "pdum_gcp"},
+                    )
                 )
-            )
-            operation = client.create_project(request=request)
-            result = operation.result(timeout=300)
+                operation = client.create_project(request=request)
+                result = operation.result(timeout=300)
+
+                return Project(
+                    name=result.name,
+                    project_id=project_id,
+                    display_name=result.display_name,
+                    labels=dict(result.labels),
+                    state=result.state.name,
+                )
+
+            except Exception as e:
+                raise AdminCredentialsError(
+                    f"Failed to create project {project_id}: {e}"
+                ) from e
+
+    def _create_project_with_gcloud(self, project_id: str, display_name: str) -> Project:
+        """Create project using gcloud CLI (for personal mode).
+
+        Args:
+            project_id: The project ID
+            display_name: The display name
+
+        Returns:
+            Project object
+
+        Raises:
+            AdminCredentialsError: If project creation fails
+        """
+        import subprocess
+
+        try:
+            # Use gcloud to create project (uses human credentials via --configuration)
+            cmd = [
+                "gcloud",
+                "--configuration",
+                self.config_name,
+                "projects",
+                "create",
+                project_id,
+                f"--name={display_name}",
+            ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+
+            if result.returncode != 0:
+                # Check if it failed because project already exists
+                if "already exists" not in result.stderr.lower():
+                    raise AdminCredentialsError(
+                        f"Failed to create project {project_id} via gcloud: {result.stderr}"
+                    )
+
+            # Get the project details
+            cmd_get = [
+                "gcloud",
+                "--configuration",
+                self.config_name,
+                "projects",
+                "describe",
+                project_id,
+                "--format=json",
+            ]
+
+            result_get = subprocess.run(cmd_get, capture_output=True, text=True, check=True)
+            project_data = json.loads(result_get.stdout)
+
+            # Update labels to add managed-by
+            labels = project_data.get("labels", {})
+            if "managed-by" not in labels:
+                labels["managed-by"] = "pdum_gcp"
+                # Update labels using gcloud
+                cmd_update = [
+                    "gcloud",
+                    "--configuration",
+                    self.config_name,
+                    "projects",
+                    "update",
+                    project_id,
+                    "--update-labels=managed-by=pdum_gcp",
+                ]
+                subprocess.run(cmd_update, capture_output=True, text=True, check=True)
 
             return Project(
-                name=result.name,
+                name=project_data.get("name", f"projects/{project_id}"),
                 project_id=project_id,
-                display_name=result.display_name,
-                labels=dict(result.labels),
-                state=result.state.name,
+                display_name=project_data.get("name", display_name),
+                labels=labels,
+                state=project_data.get("lifecycleState", "ACTIVE"),
             )
 
         except Exception as e:
             raise AdminCredentialsError(
-                f"Failed to create project {project_id}: {e}"
+                f"Failed to create project {project_id} via gcloud: {e}"
             ) from e
 
     def _link_project_billing(self, project_id: str, billing_account_id: str) -> None:
