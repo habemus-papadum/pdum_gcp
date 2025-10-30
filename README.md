@@ -142,6 +142,14 @@ billing_accounts = creds.list_billing_accounts()
 for account in billing_accounts:
     print(f"{account.display_name}: {account.account_id} (open={account.open})")
 
+# Get default billing account (when there's exactly one open account)
+try:
+    default_account = creds.get_default_billing_account()
+    print(f"Using billing account: {default_account.display_name} ({default_account.account_id})")
+except admin.AdminCredentialsError as e:
+    print(f"Cannot use default: {e}")
+    # Handle multiple accounts or no accounts
+
 # Use the Google Cloud credentials with any GCP client library
 from google.cloud import resourcemanager_v3
 

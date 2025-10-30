@@ -106,6 +106,52 @@ class AdminCredentials:
 
         return accounts
 
+    def get_default_billing_account(self) -> BillingAccount:
+        """Get the default billing account (only works if there's exactly one open account).
+
+        This is useful for automation scenarios where you want to use a billing account
+        without explicit selection, but only when there's no ambiguity.
+
+        Returns:
+            The single open BillingAccount
+
+        Raises:
+            AdminCredentialsError: If there are zero or multiple open billing accounts
+
+        Example:
+            >>> creds = admin.load_admin_credentials("work")
+            >>> account = creds.get_default_billing_account()
+            >>> print(f"Using billing account: {account.display_name} ({account.account_id})")
+        """
+        # Get all billing accounts
+        all_accounts = self.list_billing_accounts()
+
+        # Filter to only open accounts
+        open_accounts = [acc for acc in all_accounts if acc.open]
+
+        # Check for exactly one open account
+        if len(open_accounts) == 0:
+            raise AdminCredentialsError(
+                "No open billing accounts found.\n\n"
+                "The admin bot needs access to at least one open billing account.\n"
+                "To grant access, run:\n"
+                f"  pdum_gcp manage-billing --config {self.config_name}"
+            )
+
+        if len(open_accounts) > 1:
+            account_list = "\n".join(
+                f"  - {acc.display_name} ({acc.account_id})" for acc in open_accounts
+            )
+            raise AdminCredentialsError(
+                f"Multiple open billing accounts found ({len(open_accounts)}):\n\n"
+                f"{account_list}\n\n"
+                "Cannot determine default billing account.\n"
+                "Please specify which billing account to use explicitly."
+            )
+
+        # Exactly one open account - return it
+        return open_accounts[0]
+
 
 def get_config_dir(config_name: str) -> Path:
     """Get the configuration directory path for a given config.
