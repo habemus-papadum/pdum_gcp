@@ -48,11 +48,6 @@ def get_current_account_email():
     return _import_utils().get_current_account_email()
 
 
-def save_config_file(config_name, bot_email, trusted_humans, dry_run=False):
-    """Save config file."""
-    return _import_utils().save_config_file(config_name, bot_email, trusted_humans, dry_run)
-
-
 def download_service_account_key(config_name, sa_email, project_id, dry_run=False):
     """Download service account key."""
     utils = _import_utils()
@@ -861,22 +856,69 @@ def grant_billing_account_access(billing_id: str, sa_email: str, dry_run: bool =
 
     console.print(f"[cyan]Granting billing admin access for billing account {billing_id}...[/cyan]")
 
+    # Retry logic for service account propagation
+    import time
+    max_retries = 5
+    retry_delay = 2  # seconds
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         console=console,
     ) as progress:
         progress.add_task(description="Granting billing admin access...", total=None)
-        run_gcloud([
-            "billing",
-            "accounts",
-            "add-iam-policy-binding",
-            billing_id,
-            f"--member=serviceAccount:{sa_email}",
-            "--role=roles/billing.admin",
-        ])
+
+        for attempt in range(max_retries):
+            try:
+                run_gcloud([
+                    "billing",
+                    "accounts",
+                    "add-iam-policy-binding",
+                    billing_id,
+                    f"--member=serviceAccount:{sa_email}",
+                    "--role=roles/billing.admin",
+                ])
+                break  # Success - exit retry loop
+            except GCloudError as e:
+                # Check if it's a "service account does not exist" error
+                if "does not exist" in str(e) and attempt < max_retries - 1:
+                    # Service account not propagated yet - wait and retry
+                    console.print(
+                        f"[yellow]Service account not yet propagated, "
+                        f"retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})...[/yellow]"
+                    )
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    # Different error or max retries exceeded
+                    raise
 
     console.print(f"[green]Billing admin access granted for {billing_id}.[/green]")
+
+
+def has_org_role(org_id: str, sa_email: str, role: str) -> bool:
+    """Check if a service account already has a specific organization role.
+
+    Args:
+        org_id: The organization ID
+        sa_email: The service account email
+        role: The role to check (e.g., 'roles/billing.admin')
+
+    Returns:
+        True if the service account has the role, False otherwise
+    """
+    try:
+        result = run_gcloud([
+            "organizations",
+            "get-iam-policy",
+            org_id,
+            "--flatten=bindings[].members",
+            f"--filter=bindings.members:serviceAccount:{sa_email} AND bindings.role:{role}",
+            "--format=value(bindings.role)",
+        ])
+        return result == role
+    except GCloudError:
+        return False
 
 
 def grant_iam_roles(org_id: Optional[str], sa_email: str, dry_run: bool = False) -> None:
@@ -897,12 +939,15 @@ def grant_iam_roles(org_id: Optional[str], sa_email: str, dry_run: bool = False)
         return
 
     console.print(
-        "[bold red]WARNING: Granting Organization Administrator and Billing Admin roles.[/bold red]"
+        "[bold red]WARNING: Granting organization-level admin roles (Organization Admin, "
+        "Billing Admin, Service Account Key Admin, Organization Policy Admin).[/bold red]"
     )
 
     roles = [
         ("roles/resourcemanager.organizationAdmin", "Organization Admin"),
         ("roles/billing.admin", "Billing Admin"),
+        ("roles/iam.serviceAccountKeyAdmin", "Service Account Key Admin"),
+        ("roles/orgpolicy.policyAdmin", "Organization Policy Admin"),
     ]
 
     if dry_run:
@@ -910,21 +955,50 @@ def grant_iam_roles(org_id: Optional[str], sa_email: str, dry_run: bool = False)
             console.print(f"[dim][DRY RUN] Would grant {role_name} to {sa_email}[/dim]")
         return
 
+    # Retry logic for service account propagation
+    import time
+    max_retries = 5
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         console=console,
     ) as progress:
         for role, role_name in roles:
+            # Check if role already exists (idempotency)
+            if has_org_role(org_id, sa_email, role):
+                console.print(f"[green]✓ {role_name} already granted to {sa_email}[/green]")
+                continue
+
             task = progress.add_task(description=f"Granting {role_name}...", total=None)
-            run_gcloud([
-                "organizations",
-                "add-iam-policy-binding",
-                org_id,
-                f"--member=serviceAccount:{sa_email}",
-                f"--role={role}",
-                "--condition=None",
-            ])
+
+            # Retry with exponential backoff for propagation delays
+            retry_delay = 2  # Reset for each role
+            for attempt in range(max_retries):
+                try:
+                    run_gcloud([
+                        "organizations",
+                        "add-iam-policy-binding",
+                        org_id,
+                        f"--member=serviceAccount:{sa_email}",
+                        f"--role={role}",
+                        "--condition=None",
+                    ])
+                    break  # Success - exit retry loop
+                except GCloudError as e:
+                    # Check if it's a "service account does not exist" error
+                    if "does not exist" in str(e) and attempt < max_retries - 1:
+                        # Service account not propagated yet - wait and retry
+                        console.print(
+                            f"[yellow]Service account not yet propagated, "
+                            f"retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})...[/yellow]"
+                        )
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    else:
+                        # Different error or max retries exceeded
+                        raise
+
             progress.remove_task(task)
 
     console.print("[green]All roles granted.[/green]")
@@ -1024,7 +1098,8 @@ def bootstrap(
 
     # Save configuration file
     console.print("\n[yellow]--- Saving Configuration ---[/yellow]")
-    config_file = save_config_file(
+    utils = _import_utils()
+    config_file = utils.save_config_file(
         config_name=config_name,
         bot_email=sa_email,
         trusted_humans=[current_user_email],
