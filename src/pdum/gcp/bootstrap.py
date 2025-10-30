@@ -33,7 +33,7 @@ def set_verbose(enabled: bool) -> None:
 # Note: Import at end to avoid circular dependencies
 def _import_utils():
     """Import utils functions (deferred to avoid circular imports)."""
-    from . import utils
+    from pdum.gcp import utils
     return utils
 
 
@@ -662,6 +662,77 @@ def link_billing_account(project_id: str, billing_id: str, dry_run: bool = False
     console.print("[green]Billing account linked.[/green]")
 
 
+def api_is_enabled(project_id: str, api: str) -> bool:
+    """Check if an API is enabled for a project.
+
+    Args:
+        project_id: The project ID
+        api: The API name (e.g., 'iam.googleapis.com')
+
+    Returns:
+        True if the API is enabled, False otherwise
+    """
+    result = run_gcloud(
+        [
+            "services",
+            "list",
+            f"--project={project_id}",
+            f"--filter=config.name:{api}",
+            "--format=value(config.name)",
+        ],
+        check=False,
+    )
+    return result == api
+
+
+def enable_api(project_id: str, api: str, api_display_name: str, dry_run: bool = False) -> None:
+    """Enable an API for a project (idempotent).
+
+    Args:
+        project_id: The project ID
+        api: The API name (e.g., 'iam.googleapis.com')
+        api_display_name: Human-readable name for display
+        dry_run: If True, don't actually enable
+    """
+    if api_is_enabled(project_id, api):
+        console.print(f"[green]API {api_display_name} is already enabled. Skipping.[/green]")
+        return
+
+    if dry_run:
+        console.print(f"[dim][DRY RUN] Would enable API: {api_display_name}[/dim]")
+        return
+
+    console.print(f"[cyan]Enabling {api_display_name}...[/cyan]")
+    run_gcloud([
+        "services",
+        "enable",
+        api,
+        f"--project={project_id}",
+    ])
+    console.print(f"[green]API {api_display_name} enabled.[/green]")
+
+
+def enable_required_apis(project_id: str, dry_run: bool = False) -> None:
+    """Enable all required APIs for the admin project (idempotent).
+
+    Args:
+        project_id: The project ID
+        dry_run: If True, don't actually enable APIs
+    """
+    console.print("\n[yellow]--- Step 2.5: Enable Required APIs ---[/yellow]")
+
+    # List of APIs to enable with display names
+    apis = [
+        ("serviceusage.googleapis.com", "Service Usage API"),
+        ("cloudresourcemanager.googleapis.com", "Cloud Resource Manager API"),
+        ("iam.googleapis.com", "IAM API"),
+        ("cloudbilling.googleapis.com", "Cloud Billing API"),
+    ]
+
+    for api, display_name in apis:
+        enable_api(project_id, api, display_name, dry_run=dry_run)
+
+
 def service_account_exists(sa_email: str, project_id: str) -> bool:
     """Check if a service account exists."""
     result = run_gcloud(
@@ -718,6 +789,87 @@ def create_service_account(project_id: str, dry_run: bool = False) -> str:
 
     console.print("[green]Service account created.[/green]")
     return sa_email
+
+
+def billing_account_has_role(billing_id: str, sa_email: str, role: str) -> bool:
+    """Check if a service account has a specific role on a billing account.
+
+    Args:
+        billing_id: The billing account ID
+        sa_email: The service account email
+        role: The role to check for
+
+    Returns:
+        True if the service account has the role, False otherwise
+    """
+    try:
+        policy_output = run_gcloud([
+            "billing",
+            "accounts",
+            "get-iam-policy",
+            billing_id,
+            "--format=json",
+        ])
+
+        if policy_output:
+            import json
+            policy = json.loads(policy_output)
+            bindings = policy.get("bindings", [])
+
+            # Check if service account has the role
+            for binding in bindings:
+                if binding.get("role") == role:
+                    members = binding.get("members", [])
+                    if f"serviceAccount:{sa_email}" in members:
+                        return True
+    except GCloudError:
+        # If we can't get the policy, assume it doesn't have the role
+        return False
+
+    return False
+
+
+def grant_billing_account_access(billing_id: str, sa_email: str, dry_run: bool = False) -> None:
+    """Grant billing account admin access to the service account (idempotent).
+
+    Args:
+        billing_id: The billing account ID
+        sa_email: The service account email
+        dry_run: If True, don't actually grant access
+    """
+    console.print("\n[yellow]--- Step 4.5: Grant Billing Account Access ---[/yellow]")
+
+    # Check if service account already has billing admin role
+    if billing_account_has_role(billing_id, sa_email, "roles/billing.admin"):
+        console.print(
+            f"[green]Service account already has billing admin access to {billing_id}. Skipping.[/green]"
+        )
+        return
+
+    if dry_run:
+        console.print(
+            f"[dim][DRY RUN] Would grant billing admin access for billing account {billing_id} to {sa_email}[/dim]"
+        )
+        return
+
+    console.print(f"[cyan]Granting billing admin access for billing account {billing_id}...[/cyan]")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        progress.add_task(description="Granting billing admin access...", total=None)
+        run_gcloud([
+            "billing",
+            "accounts",
+            "add-iam-policy-binding",
+            billing_id,
+            f"--member=serviceAccount:{sa_email}",
+            "--role=roles/billing.admin",
+        ])
+
+    console.print(f"[green]Billing admin access granted for {billing_id}.[/green]")
 
 
 def grant_iam_roles(org_id: Optional[str], sa_email: str, dry_run: bool = False) -> None:
@@ -855,11 +1007,17 @@ def bootstrap(
         # Link billing
         link_billing_account(bot_project_id, billing_id, dry_run=dry_run)
 
+        # Enable required APIs
+        enable_required_apis(bot_project_id, dry_run=dry_run)
+
         # Create service account
         create_service_account(bot_project_id, dry_run=dry_run)
 
         # Grant IAM roles
         grant_iam_roles(org_id, sa_email, dry_run=dry_run)
+
+        # Grant billing account access
+        grant_billing_account_access(billing_id, sa_email, dry_run=dry_run)
 
         # Save configuration file
         console.print("\n[yellow]--- Saving Configuration ---[/yellow]")

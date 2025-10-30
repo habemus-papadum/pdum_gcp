@@ -9,7 +9,7 @@ from InquirerPy import inquirer
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from .bootstrap import (
+from pdum.gcp.bootstrap import (
     GCloudError,
     get_available_configs,
     get_config_value,

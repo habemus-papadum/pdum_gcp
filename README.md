@@ -1,4 +1,4 @@
-# gcp
+# pdum_gcp
 
 [![CI](https://github.com/habemus-papadum/pdum_gcp/actions/workflows/ci.yml/badge.svg)](https://github.com/habemus-papadum/pdum_gcp/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/habemus-papadum-gcp.svg)](https://pypi.org/project/habemus-papadum-gcp/)
@@ -6,7 +6,174 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
-Utilities and tools for Google Cloud
+A layered automation framework for Google Cloud Platform that enables organization-level infrastructure management through admin service accounts.
+
+## ⚠️ Important Security Caveat
+
+**This tool is designed for individual researchers and small teams who want complete control of their cloud infrastructure.** It creates service accounts with full organization-level admin permissions, which can be a significant security risk.
+
+**This is NOT recommended for large-scale organizations or production environments.**
+
+### Why This Approach Has Risks
+
+- **Single Point of Failure**: If the admin bot credentials are compromised, an attacker has full control of your entire GCP organization
+- **Broad Permissions**: Organization Admin and Billing Admin roles grant essentially unlimited access
+- **Credential Management**: Service account keys stored locally need to be carefully protected
+
+### When to Use This Tool
+
+✅ **Good Use Cases:**
+- Individual researchers managing their own cloud resources
+- Small teams with full trust between members
+- Development/testing environments
+- Learning and experimentation
+- Early-stage projects requiring rapid iteration
+
+❌ **Not Recommended For:**
+- Enterprise organizations with compliance requirements
+- Multi-team environments with varying trust levels
+- Production systems handling sensitive data
+- Any scenario requiring audit trails and separation of duties
+
+### Graduating from This Approach
+
+As your organization grows, you should consider:
+
+1. **Migrate to proper IAM hierarchy**: Use folders, fine-grained roles, and service account impersonation
+2. **Implement least-privilege access**: Reduce the admin bot's permissions to only what's needed
+3. **Use Workload Identity**: For GKE/Cloud Run workloads, avoid long-lived service account keys
+4. **Enable audit logging**: Track all actions taken by service accounts
+5. **Consider GCP's Organization Policy Service**: Enforce constraints across your organization
+
+### Alternative: Lock Down Permissions
+
+If you want to continue using this tool but reduce risk:
+
+1. Remove the broad Organization Admin role
+2. Grant only specific permissions needed for your workflows
+3. Use [IAM Conditions](https://cloud.google.com/iam/docs/conditions-overview) to limit when/where the bot can operate
+4. Regularly rotate service account keys
+5. Monitor admin bot activity closely
+
+## Overview
+
+`pdum_gcp` provides a structured approach to managing GCP resources at scale. The core concept is creating **admin bots** - service accounts with organization-level permissions - that serve as the foundation for all downstream automation.
+
+### Key Features
+
+- 🤖 **Admin Bot Management**: Bootstrap organization-level service accounts with full admin permissions
+- 🔧 **Multi-Organization Support**: Manage multiple GCP organizations from a single machine using gcloud configs
+- 📦 **Layered Architecture**: Clear separation between bootstrap (CLI-based) and automation (API-based) layers
+- 🔒 **Secure Credential Storage**: Local configuration management in `~/.config/gcloud/pdum_gcp/`
+- 🔄 **Idempotent Operations**: All commands can be safely re-run without side effects
+
+## Architecture
+
+The framework is designed in distinct layers, each building on the previous:
+
+### Phase 1: Bootstrap Layer (CLI-Based)
+
+The bootstrap phase uses the **gcloud CLI** (not the Python API) to create the foundational admin bot. This is intentional - it leverages your existing human credentials to set up the automation infrastructure.
+
+**Commands:**
+- `pdum_gcp bootstrap` - Create a new admin bot for an organization
+- `pdum_gcp import` - Import an existing admin bot configuration to a new machine
+- `pdum_gcp manage-billing` - Manage billing account access for the admin bot
+
+**What it does:**
+1. Creates an admin project (e.g., `h-papadum-admin-abc123`)
+2. Links billing account to the project
+3. Enables required APIs (Cloud Resource Manager, IAM, Cloud Billing, Service Usage)
+4. Creates a service account (`admin-robot@h-papadum-admin-abc123.iam.gserviceaccount.com`)
+5. Grants organization-level permissions (Organization Admin, Billing Admin)
+6. Grants billing account admin access (for the billing account used in step 2)
+7. Saves configuration to `~/.config/gcloud/pdum_gcp/<config>/`
+   - `config.yaml` - Admin bot email and trusted humans list
+   - `admin.json` - Service account credentials
+
+**Multi-Organization Support:**
+
+Each gcloud config can have its own admin bot. For example:
+
+```bash
+# Bootstrap for work organization
+pdum_gcp bootstrap --config work
+
+# Bootstrap for personal organization
+pdum_gcp bootstrap --config personal
+
+# Import existing config on a new machine
+pdum_gcp import --config work
+```
+
+This creates separate admin bots:
+- `~/.config/gcloud/pdum_gcp/work/` - Work organization admin
+- `~/.config/gcloud/pdum_gcp/personal/` - Personal organization admin
+
+### Phase 2: Admin Layer (Python API-Based) [In Progress]
+
+The admin layer uses the **Python GCP API** with admin bot credentials to perform automated operations.
+
+**Current Status:** ✅ Credential loading implemented
+
+**Capabilities:**
+- ✅ Load admin credentials from `~/.config/gcloud/pdum_gcp/<config>/`
+- ✅ Validate configuration and service account keys
+- ✅ List available configurations
+- ✅ List billing accounts
+- 🚧 Create and manage GCP projects programmatically (coming soon)
+- 🚧 Set up billing, IAM policies, and project structure (coming soon)
+- 🚧 Provision infrastructure at scale (coming soon)
+
+**Example:**
+```python
+from pdum.gcp import admin
+
+# Load admin bot credentials for a specific config
+creds = admin.load_admin_credentials(config="work")
+
+# Access credential properties
+print(f"Admin bot: {creds.admin_bot_email}")
+print(f"Project: {creds.project_id}")
+print(f"Trusted humans: {creds.trusted_humans}")
+
+# List billing accounts
+billing_accounts = creds.list_billing_accounts()
+for account in billing_accounts:
+    print(f"{account.display_name}: {account.account_id} (open={account.open})")
+
+# Use the Google Cloud credentials with any GCP client library
+from google.cloud import resourcemanager_v3
+
+client = resourcemanager_v3.ProjectsClient(credentials=creds.google_cloud_credentials)
+# Now you can use the client with admin bot permissions
+
+# List all available configurations
+configs = admin.list_available_configs()
+print(f"Available configs: {configs}")
+```
+
+**Error Handling:**
+
+The `load_admin_credentials()` function provides helpful error messages if credentials are missing:
+
+```python
+try:
+    creds = admin.load_admin_credentials("work")
+except admin.AdminCredentialsError as e:
+    print(e)
+    # Error message will tell you whether to run:
+    # - pdum_gcp bootstrap --config work
+    # - pdum_gcp import --config work
+```
+
+### Phase 3: Downstream Layers [Future]
+
+Additional layers will build on top of the admin layer:
+- Resource provisioning templates
+- Multi-project orchestration
+- Cost management and monitoring
+- Security policy enforcement
 
 ## Installation
 
@@ -22,13 +189,157 @@ Or using uv:
 uv pip install habemus-papadum-gcp
 ```
 
-## Usage
+## Quick Start
 
-```python
-from pdum import gcp
+### 1. Bootstrap Your First Admin Bot
 
-print(gcp.__version__)
+```bash
+# Interactive mode - prompts for all options
+pdum_gcp bootstrap
+
+# Or specify options explicitly
+pdum_gcp bootstrap --config work --billing 0X0X0X-0X0X0X-0X0X0X --org 123456789
 ```
+
+This will:
+- ✅ Create an admin project in your organization
+- ✅ Create the admin service account
+- ✅ Grant org-level permissions
+- ✅ Save configuration locally
+- ✅ Download service account key
+
+### 2. Import on Additional Machines
+
+Once you've bootstrapped on one machine, use `import` on other machines:
+
+```bash
+pdum_gcp import --config work
+```
+
+This will:
+- ✅ Find the existing admin project
+- ✅ Locate the admin service account
+- ✅ Download credentials locally
+- ✅ Set up the same configuration
+
+### 3. Verify Configuration
+
+Check your configuration:
+
+```bash
+ls -la ~/.config/gcloud/pdum_gcp/work/
+# config.yaml - Contains admin bot email and trusted humans
+# admin.json  - Service account credentials
+```
+
+## CLI Reference
+
+### `pdum_gcp bootstrap`
+
+Create a new admin bot for an organization.
+
+**Options:**
+- `--config, -c` - Gcloud configuration name (interactive if not provided)
+- `--billing, -b` - Billing account ID (interactive if not provided)
+- `--org, -o` - Organization ID (interactive if not provided)
+- `--dry-run, -n` - Show what would be done without making changes
+- `--verbose, -v` - Print all gcloud commands
+
+**Examples:**
+```bash
+# Interactive mode
+pdum_gcp bootstrap
+
+# Dry run to preview
+pdum_gcp bootstrap --dry-run
+
+# Specify all options
+pdum_gcp bootstrap --config work --billing 0X0X0X --org 123456789
+
+# Verbose mode for debugging
+pdum_gcp bootstrap --verbose
+```
+
+### `pdum_gcp import`
+
+Import an existing admin bot configuration to this machine.
+
+**Options:**
+- `--config, -c` - Gcloud configuration name (interactive if not provided)
+- `--verbose, -v` - Print all gcloud commands
+
+**Examples:**
+```bash
+# Interactive mode
+pdum_gcp import
+
+# Specify config
+pdum_gcp import --config work
+```
+
+### `pdum_gcp manage-billing`
+
+Manage billing account access for the admin bot.
+
+This command allows you to grant the admin bot access to additional billing accounts using an interactive multi-select interface. The bootstrap command automatically grants access to the billing account used during setup, but you may want to give the admin bot access to other billing accounts as well.
+
+**Why this is needed:** Billing accounts have their own IAM policies separate from organization-level permissions. Even if the admin bot has organization-level billing admin role, it needs explicit access to each billing account to list and manage them via the Python API.
+
+**Options:**
+- `--config, -c` - Gcloud configuration name (interactive if not provided)
+- `--verbose, -v` - Print all gcloud commands
+
+**Examples:**
+```bash
+# Interactive mode (shows current access status and multi-select interface)
+pdum_gcp manage-billing
+
+# Specify config
+pdum_gcp manage-billing --config work
+
+# Verbose mode for debugging
+pdum_gcp manage-billing --verbose
+```
+
+**What it does:**
+1. Displays current billing account access status
+2. Shows which billing accounts the admin bot can already access
+3. Presents a multi-select interface for billing accounts without access
+4. Grants billing admin role for selected accounts
+
+### `pdum_gcp version`
+
+Show the version of pdum_gcp.
+
+```bash
+pdum_gcp version
+```
+
+## Configuration Structure
+
+Each gcloud config has its own directory under `~/.config/gcloud/pdum_gcp/`:
+
+```
+~/.config/gcloud/pdum_gcp/
+├── work/
+│   ├── config.yaml       # Admin bot email, trusted humans
+│   └── admin.json        # Service account credentials (keep secure!)
+└── personal/
+    ├── config.yaml
+    └── admin.json
+```
+
+### config.yaml Format
+
+```yaml
+admin_bot: admin-robot@h-papadum-admin-abc123.iam.gserviceaccount.com
+trusted_humans:
+  - user@example.com
+```
+
+### admin.json Format
+
+Standard GCP service account JSON key file. **Keep this secure!** It grants full admin access to your organization.
 
 ## Development
 

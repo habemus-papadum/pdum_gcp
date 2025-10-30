@@ -5,8 +5,8 @@ from typing import Optional
 from rich.console import Console
 from rich.panel import Panel
 
-from .bootstrap import BOT_PROJECT_PREFIX, BOT_SA_NAME, GCloudError, run_gcloud, set_verbose
-from .utils import (
+from pdum.gcp.bootstrap import BOT_PROJECT_PREFIX, BOT_SA_NAME, GCloudError, run_gcloud, set_verbose
+from pdum.gcp.utils import (
     choose_config,
     download_service_account_key,
     get_current_account_email,

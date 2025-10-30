@@ -8,6 +8,7 @@ from rich.console import Console
 
 from pdum.gcp import bootstrap as bootstrap_module
 from pdum.gcp import import_config as import_module
+from pdum.gcp import manage_billing as manage_billing_module
 
 app = typer.Typer(
     help="Utilities and tools for Google Cloud",
@@ -146,6 +147,58 @@ def import_config(
         sys.exit(1)
     except KeyboardInterrupt:
         console.print("\n[yellow]Import interrupted by user.[/yellow]")
+        sys.exit(130)
+    except Exception as e:
+        console.print(f"[bold red]Unexpected error:[/bold red] {e}")
+        sys.exit(1)
+
+
+@app.command("manage-billing")
+def manage_billing(
+    config_name: Optional[str] = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="The gcloud configuration name to use (interactive if not provided)",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Print all gcloud commands",
+    ),
+):
+    """
+    Manage billing account access for the admin bot.
+
+    This command allows you to grant the admin bot access to additional
+    billing accounts using an interactive multi-select interface.
+
+    The admin bot needs access to billing accounts to:
+    - List billing accounts via the Python API
+    - Link billing accounts to projects
+    - Manage billing-related operations
+
+    Examples:
+        # Interactive mode
+        pdum_gcp manage-billing
+
+        # Specify config
+        pdum_gcp manage-billing --config work
+
+        # Verbose mode
+        pdum_gcp manage-billing --verbose
+    """
+    try:
+        manage_billing_module.manage_billing_access(
+            config_name=config_name,
+            verbose=verbose,
+        )
+    except manage_billing_module.GCloudError as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Manage billing interrupted by user.[/yellow]")
         sys.exit(130)
     except Exception as e:
         console.print(f"[bold red]Unexpected error:[/bold red] {e}")
