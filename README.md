@@ -120,9 +120,9 @@ The admin layer uses the **Python GCP API** with admin bot credentials to perfor
 - ✅ Load admin credentials from `~/.config/gcloud/pdum_gcp/<config>/`
 - ✅ Validate configuration and service account keys
 - ✅ List available configurations
-- ✅ List billing accounts
-- 🚧 Create and manage GCP projects programmatically (coming soon)
-- 🚧 Set up billing, IAM policies, and project structure (coming soon)
+- ✅ List billing accounts and get default billing account
+- ✅ Create and manage GCP projects programmatically
+- ✅ Set up billing, IAM policies, service accounts, and API enabling
 - 🚧 Provision infrastructure at scale (coming soon)
 
 **Example:**
@@ -150,6 +150,29 @@ except admin.AdminCredentialsError as e:
     print(f"Cannot use default: {e}")
     # Handle multiple accounts or no accounts
 
+# Create a new GCP project with all the bells and whistles
+project = creds.create_project(
+    project_id="my-ml-project-12345",
+    display_name="My ML Project",
+    # billing_account_id is optional - uses default if not specified
+    # enable_apis is optional - defaults to ML-focused APIs
+)
+print(f"Created project: {project.project_id}")
+print(f"Project state: {project.state}")
+print(f"Labels: {project.labels}")
+
+# Create a project with specific billing and custom APIs
+project = creds.create_project(
+    project_id="my-custom-project",
+    display_name="Custom Project",
+    billing_account_id="016EF2-C9E743-5BA3D3",
+    enable_apis=[
+        "firestore.googleapis.com",
+        "compute.googleapis.com",
+        "storage-api.googleapis.com",
+    ]
+)
+
 # Use the Google Cloud credentials with any GCP client library
 from google.cloud import resourcemanager_v3
 
@@ -160,6 +183,43 @@ client = resourcemanager_v3.ProjectsClient(credentials=creds.google_cloud_creden
 configs = admin.list_available_configs()
 print(f"Available configs: {configs}")
 ```
+
+**Creating Projects with `create_project()`:**
+
+The `create_project()` method provides a complete project setup in a single call:
+
+```python
+project = creds.create_project(
+    project_id="my-ml-project-12345",       # Required: globally unique project ID
+    display_name="My ML Project",           # Optional: defaults to project_id
+    billing_account_id="016EF2-...",        # Optional: defaults to get_default_billing_account()
+    enable_apis=["firestore.googleapis.com"]  # Optional: defaults to ML APIs
+)
+```
+
+**What it does:**
+1. Creates the project with label `managed-by: pdum_gcp`
+2. Links the billing account
+3. Creates `admin-robot@{project_id}.iam.gserviceaccount.com` service account
+4. Grants owner role to admin-robot and all trusted humans
+5. Enables specified APIs (or ML defaults)
+
+**Default ML APIs:**
+- `firestore.googleapis.com` - Firestore
+- `aiplatform.googleapis.com` - Vertex AI / Gemini
+- `container.googleapis.com` - GKE
+- `storage-api.googleapis.com` - Cloud Storage
+- `storage-component.googleapis.com` - Cloud Storage Component
+- `bigtable.googleapis.com` - BigTable
+- `bigtableadmin.googleapis.com` - BigTable Admin
+
+**Idempotency:**
+The method is fully idempotent - you can re-run it safely:
+- If project exists: updates labels and continues
+- If billing already linked: skips
+- If service account exists: skips creation
+- If IAM roles exist: skips
+- If APIs enabled: skips
 
 **Error Handling:**
 

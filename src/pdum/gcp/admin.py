@@ -9,9 +9,13 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
+from google.api_core import exceptions as api_exceptions
 from google.auth import exceptions as auth_exceptions
-from google.cloud import billing_v1
+from google.cloud import billing_v1, iam_admin_v1, resourcemanager_v3
+from google.cloud import service_usage_v1
+from google.iam.v1 import iam_policy_pb2, policy_pb2
 from google.oauth2 import service_account
+from google.protobuf import field_mask_pb2
 
 
 class AdminCredentialsError(Exception):
@@ -40,6 +44,25 @@ class BillingAccount:
     def account_id(self) -> str:
         """Get the billing account ID without the 'billingAccounts/' prefix."""
         return self.name.replace("billingAccounts/", "")
+
+
+@dataclass
+class Project:
+    """Information about a GCP project.
+
+    Attributes:
+        name: The full resource name (e.g., "projects/my-project-id")
+        project_id: The project ID
+        display_name: The human-readable display name
+        labels: Dictionary of project labels
+        state: Project state (e.g., "ACTIVE", "DELETE_REQUESTED")
+    """
+
+    name: str
+    project_id: str
+    display_name: str
+    labels: dict[str, str]
+    state: str
 
 
 @dataclass
@@ -151,6 +174,341 @@ class AdminCredentials:
 
         # Exactly one open account - return it
         return open_accounts[0]
+
+    def create_project(
+        self,
+        project_id: str,
+        display_name: Optional[str] = None,
+        billing_account_id: Optional[str] = None,
+        enable_apis: Optional[list[str]] = None,
+    ) -> Project:
+        """Create a new GCP project with billing, service account, and APIs enabled.
+
+        This method creates a complete GCP project setup including:
+        - Project creation with labels
+        - Billing account linking
+        - Service account creation (admin-robot)
+        - IAM roles (owner) for service account and trusted humans
+        - API/service enabling
+
+        The method is idempotent - it will skip existing resources gracefully.
+
+        Args:
+            project_id: The project ID (must be globally unique)
+            display_name: Human-readable project name (defaults to project_id)
+            billing_account_id: Billing account ID to link (defaults to get_default_billing_account())
+            enable_apis: List of APIs to enable (defaults to ML-focused APIs)
+
+        Returns:
+            Project object with project information
+
+        Raises:
+            AdminCredentialsError: If project creation fails or permissions are insufficient
+
+        Example:
+            >>> creds = admin.load_admin_credentials("work")
+            >>> project = creds.create_project(
+            ...     project_id="my-ml-project-12345",
+            ...     display_name="My ML Project"
+            ... )
+            >>> print(f"Created project: {project.project_id}")
+        """
+        # Use defaults if not provided
+        if display_name is None:
+            display_name = project_id
+
+        if billing_account_id is None:
+            default_billing = self.get_default_billing_account()
+            billing_account_id = default_billing.account_id
+
+        if enable_apis is None:
+            # Default ML-focused APIs
+            enable_apis = [
+                "firestore.googleapis.com",
+                "aiplatform.googleapis.com",  # Vertex AI / Gemini
+                "container.googleapis.com",  # GKE
+                "storage-api.googleapis.com",  # Cloud Storage
+                "storage-component.googleapis.com",  # Cloud Storage Component
+                "bigtable.googleapis.com",  # BigTable
+                "bigtableadmin.googleapis.com",  # BigTable Admin
+            ]
+
+        # Step 1: Create or verify project exists
+        project = self._create_or_get_project(project_id, display_name)
+
+        # Step 2: Link billing account
+        self._link_project_billing(project_id, billing_account_id)
+
+        # Step 3: Create service account "admin-robot"
+        sa_email = self._create_project_service_account(project_id)
+
+        # Step 4: Grant owner IAM roles
+        self._grant_project_owners(project_id, sa_email)
+
+        # Step 5: Enable APIs/services
+        self._enable_project_apis(project_id, enable_apis)
+
+        return project
+
+    def _create_or_get_project(self, project_id: str, display_name: str) -> Project:
+        """Create a new project or get existing one (idempotent).
+
+        Args:
+            project_id: The project ID
+            display_name: The display name
+
+        Returns:
+            Project object
+
+        Raises:
+            AdminCredentialsError: If project creation fails
+        """
+        client = resourcemanager_v3.ProjectsClient(credentials=self.google_cloud_credentials)
+
+        # Try to get existing project first
+        try:
+            existing = client.get_project(name=f"projects/{project_id}")
+            # Project exists - verify it's active
+            if existing.state != resourcemanager_v3.Project.State.ACTIVE:
+                raise AdminCredentialsError(
+                    f"Project {project_id} exists but is not ACTIVE (state: {existing.state.name})"
+                )
+
+            # Update labels if needed
+            labels = dict(existing.labels)
+            if "managed-by" not in labels:
+                labels["managed-by"] = "pdum_gcp"
+                update_mask = field_mask_pb2.FieldMask(paths=["labels"])
+                update_request = resourcemanager_v3.UpdateProjectRequest(
+                    project=resourcemanager_v3.Project(
+                        name=existing.name,
+                        labels=labels,
+                    ),
+                    update_mask=update_mask,
+                )
+                operation = client.update_project(request=update_request)
+                operation.result(timeout=300)
+
+            return Project(
+                name=existing.name,
+                project_id=project_id,
+                display_name=existing.display_name,
+                labels=labels,
+                state=existing.state.name,
+            )
+
+        except (api_exceptions.NotFound, api_exceptions.PermissionDenied):
+            # Project doesn't exist - create it
+            # Note: GCP returns PermissionDenied (403) instead of NotFound (404)
+            # when a project doesn't exist (for security reasons)
+            pass
+
+        # Create new project
+        try:
+            request = resourcemanager_v3.CreateProjectRequest(
+                project=resourcemanager_v3.Project(
+                    project_id=project_id,
+                    display_name=display_name,
+                    labels={"managed-by": "pdum_gcp"},
+                )
+            )
+            operation = client.create_project(request=request)
+            result = operation.result(timeout=300)
+
+            return Project(
+                name=result.name,
+                project_id=project_id,
+                display_name=result.display_name,
+                labels=dict(result.labels),
+                state=result.state.name,
+            )
+
+        except Exception as e:
+            raise AdminCredentialsError(
+                f"Failed to create project {project_id}: {e}"
+            ) from e
+
+    def _link_project_billing(self, project_id: str, billing_account_id: str) -> None:
+        """Link billing account to project (idempotent).
+
+        Args:
+            project_id: The project ID
+            billing_account_id: The billing account ID
+
+        Raises:
+            AdminCredentialsError: If billing linking fails
+        """
+        client = billing_v1.CloudBillingClient(credentials=self.google_cloud_credentials)
+
+        # Check if billing is already linked
+        try:
+            billing_info = client.get_project_billing_info(name=f"projects/{project_id}")
+            billing_account_name = f"billingAccounts/{billing_account_id}"
+
+            if (
+                billing_info.billing_account_name == billing_account_name
+                and billing_info.billing_enabled
+            ):
+                # Already linked correctly
+                return
+        except Exception:
+            # If we can't get billing info, try to set it
+            pass
+
+        # Link billing account
+        try:
+            request = billing_v1.UpdateProjectBillingInfoRequest(
+                name=f"projects/{project_id}",
+                project_billing_info=billing_v1.ProjectBillingInfo(
+                    billing_account_name=f"billingAccounts/{billing_account_id}"
+                ),
+            )
+            client.update_project_billing_info(request=request)
+        except Exception as e:
+            raise AdminCredentialsError(
+                f"Failed to link billing account to project {project_id}: {e}"
+            ) from e
+
+    def _create_project_service_account(self, project_id: str) -> str:
+        """Create admin-robot service account in project (idempotent).
+
+        Args:
+            project_id: The project ID
+
+        Returns:
+            Service account email
+
+        Raises:
+            AdminCredentialsError: If service account creation fails
+        """
+        client = iam_admin_v1.IAMClient(credentials=self.google_cloud_credentials)
+        sa_email = f"admin-robot@{project_id}.iam.gserviceaccount.com"
+
+        # Try to get existing service account
+        try:
+            client.get_service_account(name=f"projects/{project_id}/serviceAccounts/{sa_email}")
+            # Service account exists - skip creation
+            return sa_email
+        except api_exceptions.NotFound:
+            # Service account doesn't exist - create it
+            pass
+
+        # Create service account
+        try:
+            request = iam_admin_v1.CreateServiceAccountRequest(
+                name=f"projects/{project_id}",
+                account_id="admin-robot",
+                service_account=iam_admin_v1.ServiceAccount(
+                    display_name="Admin Robot"
+                ),
+            )
+            client.create_service_account(request=request)
+            return sa_email
+        except Exception as e:
+            raise AdminCredentialsError(
+                f"Failed to create service account in project {project_id}: {e}"
+            ) from e
+
+    def _grant_project_owners(self, project_id: str, sa_email: str) -> None:
+        """Grant owner role to service account and trusted humans (idempotent).
+
+        Args:
+            project_id: The project ID
+            sa_email: Service account email
+
+        Raises:
+            AdminCredentialsError: If IAM policy update fails
+        """
+        client = resourcemanager_v3.ProjectsClient(credentials=self.google_cloud_credentials)
+
+        # Get current IAM policy
+        try:
+            policy = client.get_iam_policy(
+                request=iam_policy_pb2.GetIamPolicyRequest(
+                    resource=f"projects/{project_id}"
+                )
+            )
+        except Exception as e:
+            raise AdminCredentialsError(
+                f"Failed to get IAM policy for project {project_id}: {e}"
+            ) from e
+
+        # Build list of members that should have owner role
+        desired_owners = [f"serviceAccount:{sa_email}"]
+        for human in self.trusted_humans:
+            desired_owners.append(f"user:{human}")
+
+        # Find existing owner binding
+        owner_binding = None
+        for binding in policy.bindings:
+            if binding.role == "roles/owner":
+                owner_binding = binding
+                break
+
+        # Add missing owners
+        if owner_binding is None:
+            # No owner binding exists - create one
+            owner_binding = policy_pb2.Binding(
+                role="roles/owner",
+                members=desired_owners,
+            )
+            policy.bindings.append(owner_binding)
+        else:
+            # Owner binding exists - add missing members
+            existing_members = set(owner_binding.members)
+            for member in desired_owners:
+                if member not in existing_members:
+                    owner_binding.members.append(member)
+
+        # Set updated IAM policy
+        try:
+            client.set_iam_policy(
+                request=iam_policy_pb2.SetIamPolicyRequest(
+                    resource=f"projects/{project_id}",
+                    policy=policy,
+                )
+            )
+        except Exception as e:
+            raise AdminCredentialsError(
+                f"Failed to set IAM policy for project {project_id}: {e}"
+            ) from e
+
+    def _enable_project_apis(self, project_id: str, apis: list[str]) -> None:
+        """Enable APIs/services for project (idempotent, best-effort).
+
+        Args:
+            project_id: The project ID
+            apis: List of API names to enable
+
+        Note:
+            This method continues on errors - API enabling failures won't fail the entire operation.
+        """
+        client = service_usage_v1.ServiceUsageClient(credentials=self.google_cloud_credentials)
+
+        for api in apis:
+            try:
+                # Check if API is already enabled
+                service_name = f"projects/{project_id}/services/{api}"
+                try:
+                    get_request = service_usage_v1.GetServiceRequest(name=service_name)
+                    service = client.get_service(request=get_request)
+                    if service.state == service_usage_v1.State.ENABLED:
+                        # Already enabled - skip
+                        continue
+                except (api_exceptions.NotFound, api_exceptions.PermissionDenied):
+                    # Service not found or not accessible - proceed with enabling
+                    pass
+
+                # Enable the service
+                enable_request = service_usage_v1.EnableServiceRequest(name=service_name)
+                operation = client.enable_service(request=enable_request)
+                # Wait for operation with timeout
+                operation.result(timeout=300)
+
+            except Exception:
+                # Continue on errors - API enabling is best-effort
+                # Don't fail the entire project creation if one API fails
+                continue
 
 
 def get_config_dir(config_name: str) -> Path:
