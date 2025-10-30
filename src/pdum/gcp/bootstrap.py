@@ -6,10 +6,8 @@ a GCP service account with organization-level admin permissions.
 
 import json
 import subprocess
-from pathlib import Path
 from typing import Optional
 
-import yaml
 from InquirerPy import inquirer
 from rich.console import Console
 from rich.panel import Panel
@@ -29,6 +27,38 @@ def set_verbose(enabled: bool) -> None:
     """Set global verbose flag."""
     global _verbose
     _verbose = enabled
+
+
+# Import common utilities
+# Note: Import at end to avoid circular dependencies
+def _import_utils():
+    """Import utils functions (deferred to avoid circular imports)."""
+    from . import utils
+    return utils
+
+
+# Expose utils functions at module level for backward compatibility
+def choose_config():
+    """Choose a gcloud configuration."""
+    return _import_utils().choose_config()
+
+
+def get_current_account_email():
+    """Get current account email."""
+    return _import_utils().get_current_account_email()
+
+
+def save_config_file(config_name, bot_email, trusted_humans, dry_run=False):
+    """Save config file."""
+    return _import_utils().save_config_file(config_name, bot_email, trusted_humans, dry_run)
+
+
+def download_service_account_key(config_name, sa_email, project_id, dry_run=False):
+    """Download service account key."""
+    utils = _import_utils()
+    # Add the step header that bootstrap expects
+    console.print("\n[yellow]--- Step 5: Download Service Account Key ---[/yellow]")
+    return utils.download_service_account_key(config_name, sa_email, project_id, dry_run)
 
 
 class GCloudError(Exception):
@@ -161,44 +191,6 @@ def get_available_configs() -> list[dict[str, str]]:
     return configs
 
 
-def choose_config() -> str:
-    """Interactively choose a gcloud configuration.
-
-    Returns:
-        The selected configuration name
-    """
-    configs = get_available_configs()
-
-    if not configs:
-        raise GCloudError("No gcloud configurations found. Please create one first.")
-
-    # If only one config, auto-select it
-    if len(configs) == 1:
-        config = configs[0]
-        name = config.get("name", "")
-        account = config.get("properties", {}).get("core", {}).get("account", "no account")
-        console.print(f"[cyan]Using only available config:[/cyan] {name} ({account})")
-        return name
-
-    # Format choices with additional info
-    choices = []
-    for config in configs:
-        name = config.get("name", "")
-        account = config.get("properties", {}).get("core", {}).get("account", "no account")
-        is_active = config.get("is_active", False)
-        active_marker = " [ACTIVE]" if is_active else ""
-        choices.append({
-            "name": f"{name} ({account}){active_marker}",
-            "value": name,
-        })
-
-    result = inquirer.select(
-        message="Select gcloud configuration:",
-        choices=choices,
-        default=next((c["value"] for c in choices if "[ACTIVE]" in c["name"]), None),
-    ).execute()
-
-    return result
 
 
 def get_billing_accounts() -> list[dict[str, str]]:
@@ -779,136 +771,6 @@ def grant_iam_roles(org_id: Optional[str], sa_email: str, dry_run: bool = False)
     console.print("[green]All roles granted.[/green]")
 
 
-def get_config_dir(config_name: str) -> Path:
-    """Get the configuration directory path for a given config.
-
-    Args:
-        config_name: The gcloud configuration name
-
-    Returns:
-        Path to the config directory
-    """
-    home = Path.home()
-    config_dir = home / ".config" / "gcloud" / "pdum_gcp" / config_name
-    return config_dir
-
-
-def get_current_account_email() -> str:
-    """Get the email address of the currently active gcloud account.
-
-    Returns:
-        The email address
-    """
-    email = get_config_value("core/account")
-    if not email:
-        raise GCloudError("Could not determine current account email")
-    return email
-
-
-def save_config_file(
-    config_name: str,
-    bot_email: str,
-    trusted_humans: list[str],
-    dry_run: bool = False
-) -> Path:
-    """Save configuration to YAML file.
-
-    Args:
-        config_name: The gcloud configuration name
-        bot_email: The admin bot email address
-        trusted_humans: List of trusted human email addresses
-        dry_run: If True, only simulate
-
-    Returns:
-        Path to the saved config file
-    """
-    config_dir = get_config_dir(config_name)
-    config_file = config_dir / "config.yaml"
-
-    config_data = {
-        "admin_bot": bot_email,
-        "trusted_humans": trusted_humans,
-    }
-
-    if dry_run:
-        console.print(f"[dim][DRY RUN] Would create config directory: {config_dir}[/dim]")
-        console.print(f"[dim][DRY RUN] Would save config to: {config_file}[/dim]")
-        console.print(f"[dim][DRY RUN] Config data: {config_data}[/dim]")
-        return config_file
-
-    # Create directory if it doesn't exist
-    config_dir.mkdir(parents=True, exist_ok=True)
-    console.print(f"[cyan]Created config directory:[/cyan] {config_dir}")
-
-    # Write YAML file
-    with open(config_file, "w") as f:
-        yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
-
-    console.print(f"[green]Saved configuration to:[/green] {config_file}")
-    return config_file
-
-
-def download_service_account_key(
-    config_name: str,
-    sa_email: str,
-    project_id: str,
-    dry_run: bool = False
-) -> Optional[Path]:
-    """Download service account key to admin.json.
-
-    Args:
-        config_name: The gcloud configuration name
-        sa_email: The service account email
-        project_id: The project ID
-        dry_run: If True, only simulate
-
-    Returns:
-        Path to the key file, or None if dry run
-    """
-    console.print("\n[yellow]--- Step 5: Download Service Account Key ---[/yellow]")
-
-    config_dir = get_config_dir(config_name)
-    key_file = config_dir / "admin.json"
-
-    if dry_run:
-        console.print(f"[dim][DRY RUN] Would download SA key to: {key_file}[/dim]")
-        return None
-
-    # Ensure directory exists
-    config_dir.mkdir(parents=True, exist_ok=True)
-
-    # Check if key already exists
-    if key_file.exists():
-        console.print(
-            f"[yellow]Key file already exists at {key_file}. "
-            "Delete it manually if you want to regenerate.[/yellow]"
-        )
-        return key_file
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-    ) as progress:
-        progress.add_task(description="Downloading service account key...", total=None)
-
-        run_gcloud([
-            "iam",
-            "service-accounts",
-            "keys",
-            "create",
-            str(key_file),
-            f"--iam-account={sa_email}",
-            f"--project={project_id}",
-        ], capture=False)
-
-    console.print(f"[green]Service account key saved to:[/green] {key_file}")
-    console.print(
-        "[bold yellow]WARNING:[/bold yellow] Keep this key file secure! "
-        "It grants admin access to your GCP organization."
-    )
-
-    return key_file
 
 
 def bootstrap(

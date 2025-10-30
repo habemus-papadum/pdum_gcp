@@ -7,6 +7,7 @@ import typer
 from rich.console import Console
 
 from pdum.gcp import bootstrap as bootstrap_module
+from pdum.gcp import import_config as import_module
 
 app = typer.Typer(
     help="Utilities and tools for Google Cloud",
@@ -92,6 +93,59 @@ def bootstrap(
         sys.exit(1)
     except KeyboardInterrupt:
         console.print("\n[yellow]Bootstrap interrupted by user.[/yellow]")
+        sys.exit(130)
+    except Exception as e:
+        console.print(f"[bold red]Unexpected error:[/bold red] {e}")
+        sys.exit(1)
+
+
+@app.command("import")
+def import_config(
+    config_name: Optional[str] = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="The gcloud configuration name to use (interactive if not provided)",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Print all gcloud commands",
+    ),
+):
+    """
+    Import existing bootstrap configuration to this machine.
+
+    This command is used to set up an auxiliary machine with access to an
+    already-bootstrapped admin service account. It will:
+    - Find the existing bot project
+    - Locate the admin service account
+    - Create local configuration files
+    - Download the service account key
+
+    Use this after running 'bootstrap' on another machine.
+
+    Examples:
+        # Interactive mode
+        pdum_gcp import
+
+        # Specify config
+        pdum_gcp import --config work
+
+        # Verbose mode
+        pdum_gcp import --verbose
+    """
+    try:
+        import_module.import_bootstrap_config(
+            config_name=config_name,
+            verbose=verbose,
+        )
+    except import_module.GCloudError as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Import interrupted by user.[/yellow]")
         sys.exit(130)
     except Exception as e:
         console.print(f"[bold red]Unexpected error:[/bold red] {e}")
