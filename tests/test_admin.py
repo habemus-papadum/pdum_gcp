@@ -15,7 +15,7 @@ import os
 
 import pytest
 
-from pdum.gcp.admin import get_email, list_organizations
+from pdum.gcp.admin import get_email, list_organizations, quota_project, walk_projects
 from pdum.gcp.types import (
     NO_BILLING_ACCOUNT,
     NO_ORG,
@@ -284,6 +284,7 @@ def test_admin_module_imports():
 
     assert hasattr(admin, "get_email")
     assert hasattr(admin, "list_organizations")
+    assert hasattr(admin, "quota_project")
 
 
 def test_types_module_imports():
@@ -303,6 +304,8 @@ def test_admin_functions_are_callable():
     """Test that the admin functions are callable (without calling them)."""
     assert callable(get_email)
     assert callable(list_organizations)
+    assert callable(quota_project)
+    assert callable(walk_projects)
 
 
 def test_project_suggest_name_with_prefix():
@@ -555,6 +558,24 @@ def test_container_has_create_folder_method():
     assert callable(NO_ORG.create_folder)
 
 
+def test_container_has_walk_projects_method():
+    """Test that Container has a walk_projects() method."""
+    assert hasattr(Container, "walk_projects")
+    assert callable(Container.walk_projects)
+
+    # Verify Organization has the method
+    assert hasattr(Organization, "walk_projects")
+    assert callable(Organization.walk_projects)
+
+    # Verify Folder has the method
+    assert hasattr(Folder, "walk_projects")
+    assert callable(Folder.walk_projects)
+
+    # Verify NO_ORG has the method
+    assert hasattr(NO_ORG, "walk_projects")
+    assert callable(NO_ORG.walk_projects)
+
+
 def test_no_org_create_folder_raises_exception():
     """Test that NO_ORG.create_folder() raises TypeError.
 
@@ -696,3 +717,233 @@ def test_project_has_billing_account_method():
     """Test that Project has a billing_account() method."""
     assert hasattr(Project, "billing_account")
     assert callable(Project.billing_account)
+
+
+def test_project_has_enabled_apis_method():
+    """Test that Project has an enabled_apis() method."""
+    assert hasattr(Project, "enabled_apis")
+    assert callable(Project.enabled_apis)
+
+
+def test_project_has_enable_apis_method():
+    """Test that Project has an enable_apis() method."""
+    assert hasattr(Project, "enable_apis")
+    assert callable(Project.enable_apis)
+
+
+def test_organization_has_billing_accounts_method():
+    """Test that Organization has a billing_accounts() method."""
+    assert hasattr(Organization, "billing_accounts")
+    assert callable(Organization.billing_accounts)
+
+
+def test_no_org_has_billing_accounts_method():
+    """Test that NO_ORG has a billing_accounts() method."""
+    assert hasattr(NO_ORG, "billing_accounts")
+    assert callable(NO_ORG.billing_accounts)
+
+
+@manual_test
+def test_quota_project():
+    """Test retrieving the quota project.
+
+    This test verifies that:
+    1. The function can retrieve the project ID from the environment
+    2. The function can fetch full project details
+    3. The function returns a valid Project object
+    4. The project has all required attributes
+
+    Note: This requires GOOGLE_CLOUD_PROJECT to be set or gcloud to have a default project.
+    """
+    project = quota_project()
+
+    # Verify we got a Project object
+    assert isinstance(project, Project)
+
+    # Verify all attributes are present
+    assert isinstance(project.id, str)
+    assert len(project.id) > 0
+    assert isinstance(project.name, str)
+    assert isinstance(project.project_number, str)
+    assert isinstance(project.lifecycle_state, str)
+    assert isinstance(project.parent, Container)
+
+    print(f"\n✓ Successfully retrieved quota project:")
+    print(f"  ID: {project.id}")
+    print(f"  Name: {project.name}")
+    print(f"  Number: {project.project_number}")
+    print(f"  State: {project.lifecycle_state}")
+    print(f"  Parent: {project.parent.display_name} ({project.parent.resource_name})")
+
+
+@manual_test
+def test_project_enabled_apis():
+    """Test listing enabled APIs for a project.
+
+    This test verifies that:
+    1. The method can retrieve enabled APIs for a project
+    2. The method returns a list of strings
+    3. Each string is a valid API service name
+
+    Note: This requires permissions to view enabled services.
+    """
+    # Get a project to test with
+    organizations = list_organizations()
+    if not organizations:
+        print("\n⚠️  No organizations found to get a test project")
+        return
+
+    # Get the first project from the first organization
+    projects = organizations[0].projects()
+    if not projects:
+        print("\n⚠️  No projects found in organization")
+        return
+
+    project = projects[0]
+
+    print(f"\n🔎 Testing enabled_apis() for project: {project.id}")
+
+    # Get enabled APIs
+    apis = project.enabled_apis()
+
+    # Verify we got a list
+    assert isinstance(apis, list)
+
+    print(f"\n✓ Found {len(apis)} enabled API(s):")
+    for api in sorted(apis)[:10]:  # Show first 10
+        print(f"  - {api}")
+
+    if len(apis) > 10:
+        print(f"  ... and {len(apis) - 10} more")
+
+    # Verify each item is a string
+    for api in apis:
+        assert isinstance(api, str)
+        assert len(api) > 0
+        # Most API names end with .googleapis.com
+        assert "." in api
+
+
+@manual_test
+def test_project_enable_apis():
+    """Test enabling APIs for a project.
+
+    This test verifies that:
+    1. The method can enable APIs for a project
+    2. The method polls the operation until completion
+    3. The method returns a successful operation result
+
+    Note: This requires "Service Usage Admin" permissions.
+    This test attempts to enable serviceusage.googleapis.com which is likely already enabled
+    (since we're using it), making this a safe test.
+    """
+    # Get the quota project to test with
+    project = quota_project()
+
+    print(f"\n🔧 Testing enable_apis() for project: {project.id}")
+
+    # Try to enable an API that's likely already enabled (serviceusage itself)
+    # This is safer than enabling something new that might not be desired
+    apis_to_enable = ["serviceusage.googleapis.com"]
+
+    print(f"   Attempting to enable: {apis_to_enable[0]}")
+
+    # Enable the API with verbose output
+    result = project.enable_apis(apis_to_enable, verbose=True, polling_interval=2.0)
+
+    # Verify we got a result
+    assert isinstance(result, dict)
+    assert result.get("done", False) is True
+
+    print(f"\n✓ API enablement completed successfully")
+    print(f"  Operation name: {result.get('name')}")
+
+    # Verify the API is now in the enabled list
+    enabled_apis = project.enabled_apis()
+    assert "serviceusage.googleapis.com" in enabled_apis
+    print(f"  Verified API is now enabled")
+
+
+@manual_test
+def test_walk_projects():
+    """Test walking through all projects across all organizations.
+
+    This test verifies that:
+    1. The walk_projects() function yields projects from all organizations
+    2. The function correctly recurses through folders
+    3. Each yielded item is a valid Project object
+
+    Note: This may take some time if you have many organizations/folders/projects.
+    """
+    print("\n" + "=" * 80)
+    print("Testing walk_projects() function")
+    print("=" * 80)
+
+    project_count = 0
+    org_project_counts = {}
+
+    # Walk through all projects
+    for project in walk_projects():
+        # Verify it's a Project object
+        assert isinstance(project, Project)
+        assert isinstance(project.id, str)
+        assert len(project.id) > 0
+
+        # Track which org this project belongs to
+        parent_name = project.parent.display_name
+        org_project_counts[parent_name] = org_project_counts.get(parent_name, 0) + 1
+
+        project_count += 1
+
+        # Print first 10 projects
+        if project_count <= 10:
+            print(f"  {project_count}. {project.id} (parent: {parent_name})")
+
+    if project_count > 10:
+        print(f"  ... and {project_count - 10} more projects")
+
+    print("\n" + "-" * 80)
+    print("Project counts by parent:")
+    for parent_name, count in sorted(org_project_counts.items()):
+        print(f"  {parent_name}: {count} project(s)")
+
+    print("-" * 80)
+    print(f"\n✓ Successfully walked through {project_count} project(s) total")
+    print("=" * 80)
+
+
+@manual_test
+def test_container_walk_projects():
+    """Test walking through projects for a specific container.
+
+    This test verifies that:
+    1. The Container.walk_projects() method yields projects
+    2. The method correctly recurses through folders
+    3. Each yielded item is a valid Project object
+    """
+    print("\n" + "=" * 80)
+    print("Testing Container.walk_projects() method")
+    print("=" * 80)
+
+    organizations = list_organizations()
+    if not organizations:
+        print("\n⚠️  No organizations found to test")
+        return
+
+    # Test with the first organization
+    org = organizations[0]
+    print(f"\nTesting with organization: {org.display_name}")
+
+    project_count = 0
+    for project in org.walk_projects():
+        assert isinstance(project, Project)
+        project_count += 1
+
+        if project_count <= 10:
+            print(f"  {project_count}. {project.id}")
+
+    if project_count > 10:
+        print(f"  ... and {project_count - 10} more projects")
+
+    print(f"\n✓ Found {project_count} project(s) in {org.display_name}")
+    print("=" * 80)

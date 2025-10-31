@@ -1,6 +1,6 @@
 """Utilities and tools for Google Cloud"""
 
-from pdum.gcp.admin import get_email, list_organizations
+from pdum.gcp.admin import get_email, list_organizations, quota_project, walk_projects
 from pdum.gcp.types import (
     NO_BILLING_ACCOUNT,
     NO_ORG,
@@ -18,6 +18,8 @@ __all__ = [
     "__version__",
     "get_email",
     "list_organizations",
+    "quota_project",
+    "walk_projects",
     "BillingAccount",
     "Container",
     "Organization",

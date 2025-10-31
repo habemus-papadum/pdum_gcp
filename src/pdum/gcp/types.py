@@ -7,7 +7,7 @@ like organizations, folders, and projects.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Generator, Optional
 
 import google.auth
 from google.auth.credentials import Credentials
@@ -125,6 +125,41 @@ class Container:
             NotImplementedError: Subclasses must implement this method
         """
         raise NotImplementedError("Subclasses must implement create_folder()")
+
+    def walk_projects(self, *, credentials=None) -> Generator[Project, None, None]:
+        """Recursively yield all projects within this container and its subfolders.
+
+        This method performs a depth-first search through the container hierarchy,
+        yielding all projects found. It first yields immediate projects of this
+        container, then recursively yields projects from all child folders.
+
+        Args:
+            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+
+        Yields:
+            Project objects found in this container and all nested folders
+
+        Example:
+            >>> from pdum.gcp import list_organizations
+            >>> orgs = list_organizations()
+            >>> for org in orgs:
+            ...     print(f"Organization: {org.display_name}")
+            ...     for project in org.walk_projects():
+            ...         print(f"  - {project.id}")
+            Organization: My Organization
+              - project-1
+              - project-2
+              - nested-folder-project-3
+        """
+        creds = self._get_credentials(credentials=credentials)
+
+        # Yield all immediate projects of this container
+        for project in self.projects(credentials=creds):
+            yield project
+
+        # Recursively yield projects from all child folders
+        for folder in self.folders(credentials=creds):
+            yield from folder.walk_projects(credentials=creds)
 
     def tree(self, *, credentials=None, _prefix: str = "", _is_last: bool = True) -> None:
         """Print a tree view of this container and all its children.
@@ -380,6 +415,61 @@ class Organization(Container):
             _credentials=creds,
         )
 
+    def billing_accounts(self, *, credentials=None) -> list[BillingAccount]:
+        """List billing accounts associated with this organization.
+
+        This method retrieves all billing accounts that are linked to this organization.
+        The user must have the "Billing Account Viewer" role to see billing accounts.
+
+        Args:
+            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+
+        Returns:
+            List of BillingAccount objects associated with this organization
+
+        Raises:
+            googleapiclient.errors.HttpError: If the API call fails
+
+        Example:
+            >>> org = list_organizations()[0]
+            >>> billing_accounts = org.billing_accounts()
+            >>> for account in billing_accounts:
+            ...     print(f"{account.display_name}: {account.id}")
+            My Billing Account: 012345-567890-ABCDEF
+        """
+        creds = self._get_credentials(credentials=credentials)
+
+        # Build the Cloud Billing V1 service client
+        billing_service = discovery.build(
+            "cloudbilling", "v1", credentials=creds, cache_discovery=False
+        )
+
+        billing_accounts = []
+
+        # List billing accounts with parent filter
+        request = billing_service.billingAccounts().list(parent=self.resource_name)
+
+        # Handle pagination
+        while request is not None:
+            response = request.execute()
+
+            for account in response.get("billingAccounts", []):
+                # Extract billing account ID from resource name
+                # Format is "billingAccounts/012345-567890-ABCDEF"
+                billing_account_id = account["name"].split("/")[1]
+                display_name = account.get("displayName", billing_account_id)
+
+                billing_accounts.append(
+                    BillingAccount(id=billing_account_id, display_name=display_name)
+                )
+
+            # Get next page
+            request = billing_service.billingAccounts().list_next(
+                previous_request=request, previous_response=response
+            )
+
+        return billing_accounts
+
 
 @dataclass
 class Folder(Container):
@@ -598,6 +688,170 @@ class Project:
             return self._credentials
         creds, _ = google.auth.default()
         return creds
+
+    def enabled_apis(self, *, credentials=None) -> list[str]:
+        """List all enabled APIs for this project.
+
+        This method retrieves all APIs/services that are currently enabled for this project.
+        The user must have the "Service Usage Consumer" role or appropriate permissions
+        to list enabled services.
+
+        Args:
+            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+
+        Returns:
+            List of enabled API service names (e.g., ['compute.googleapis.com', 'storage.googleapis.com'])
+
+        Raises:
+            googleapiclient.errors.HttpError: If the API call fails
+
+        Example:
+            >>> project = quota_project()
+            >>> apis = project.enabled_apis()
+            >>> print(f"Found {len(apis)} enabled APIs")
+            >>> for api in apis:
+            ...     print(f"  - {api}")
+            Found 15 enabled APIs
+              - compute.googleapis.com
+              - storage.googleapis.com
+        """
+        creds = self._get_credentials(credentials=credentials)
+
+        # Build the Service Usage V1 service client
+        service_usage = discovery.build(
+            "serviceusage", "v1", credentials=creds, cache_discovery=False
+        )
+
+        enabled_apis = []
+
+        # List services with filter for enabled state
+        parent_name = f"projects/{self.id}"
+        request = service_usage.services().list(parent=parent_name, filter="state:ENABLED")
+
+        # Handle pagination
+        while request is not None:
+            response = request.execute()
+
+            for service in response.get("services", []):
+                # Extract the API service name from config
+                # The 'config.name' field contains the service name (e.g., compute.googleapis.com)
+                api_name = service.get("config", {}).get("name", "")
+                if api_name:
+                    enabled_apis.append(api_name)
+
+            # Get next page
+            request = service_usage.services().list_next(
+                previous_request=request, previous_response=response
+            )
+
+        return enabled_apis
+
+    def enable_apis(
+        self,
+        api_list: list[str],
+        *,
+        credentials=None,
+        timeout: float = 300.0,
+        verbose: bool = True,
+        polling_interval: float = 5.0,
+    ) -> dict:
+        """Enable multiple APIs for this project using batch enable.
+
+        This method enables multiple APIs/services for the project in a single operation.
+        It polls the long-running operation until completion or timeout. The user must have
+        the "Service Usage Admin" role or appropriate permissions to enable services.
+
+        Args:
+            api_list: List of API service names to enable (e.g., ['compute.googleapis.com', 'storage.googleapis.com'])
+            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+            timeout: Maximum time in seconds to wait for operation completion. Defaults to 300 (5 minutes).
+            verbose: If True, prints a dot (.) for each polling attempt. Defaults to True.
+            polling_interval: Time in seconds between polling attempts. Defaults to 5.0.
+
+        Returns:
+            The completed operation response as a dictionary
+
+        Raises:
+            googleapiclient.errors.HttpError: If the API call fails
+            TimeoutError: If the operation doesn't complete within the timeout period
+            RuntimeError: If the operation fails with an error
+
+        Example:
+            >>> project = quota_project()
+            >>> apis_to_enable = ['compute.googleapis.com', 'storage.googleapis.com']
+            >>> result = project.enable_apis(apis_to_enable)
+            >>> print("APIs enabled successfully")
+            APIs enabled successfully
+        """
+        import sys
+        import time
+
+        creds = self._get_credentials(credentials=credentials)
+
+        # Build the Service Usage V1 service client
+        service_usage = discovery.build(
+            "serviceusage", "v1", credentials=creds, cache_discovery=False
+        )
+
+        # Prepare the batch enable request
+        parent_name = f"projects/{self.id}"
+        request_body = {"serviceIds": api_list}
+
+        # Call batchEnable to initiate the operation
+        operation = (
+            service_usage.services()
+            .batchEnable(parent=parent_name, body=request_body)
+            .execute()
+        )
+
+        operation_name = operation.get("name")
+        if verbose:
+            print(
+                f"Enabling {len(api_list)} APIs for project {self.id}... ",
+                end="",
+                flush=True,
+            )
+
+        # Poll the operation until it's done or timeout
+        start_time = time.time()
+
+        while True:
+            # Check timeout
+            elapsed = time.time() - start_time
+            if elapsed > timeout:
+                if verbose:
+                    print()  # New line after dots
+                raise TimeoutError(
+                    f"Operation timed out after {timeout} seconds. "
+                    f"Operation name: {operation_name}"
+                )
+
+            # Get operation status
+            operation = service_usage.operations().get(name=operation_name).execute()
+
+            # Check if operation is done
+            if operation.get("done", False):
+                if verbose:
+                    print()  # New line after dots
+
+                # Check for errors
+                if "error" in operation:
+                    error = operation["error"]
+                    error_message = error.get("message", "Unknown error")
+                    error_code = error.get("code", "Unknown")
+                    raise RuntimeError(
+                        f"Operation failed with error code {error_code}: {error_message}"
+                    )
+
+                # Operation completed successfully
+                return operation
+
+            # Print dot if verbose
+            if verbose:
+                print(".", end="", flush=True)
+
+            # Wait before next poll
+            time.sleep(polling_interval)
 
     def billing_account(self, *, credentials=None) -> BillingAccount:
         """Get the billing account associated with this project.
@@ -891,6 +1145,66 @@ class _NoOrgSentinel(Container):
             credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
         """
         return self.projects(credentials=credentials)
+
+    def billing_accounts(self, *, credentials=None) -> list[BillingAccount]:
+        """List all billing accounts visible to the user.
+
+        For NO_ORG (projects without an organization), this returns all billing accounts
+        that the authenticated user has permission to view, regardless of their parent
+        organization. This is useful for personal GCP accounts or when working across
+        multiple organizations.
+
+        The user must have the "Billing Account Viewer" role to see billing accounts.
+
+        Args:
+            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+
+        Returns:
+            List of all BillingAccount objects visible to the user
+
+        Raises:
+            googleapiclient.errors.HttpError: If the API call fails
+
+        Example:
+            >>> from pdum.gcp import NO_ORG
+            >>> billing_accounts = NO_ORG.billing_accounts()
+            >>> for account in billing_accounts:
+            ...     print(f"{account.display_name}: {account.id}")
+            Personal Billing: 012345-567890-ABCDEF
+        """
+        creds = self._get_credentials(credentials=credentials)
+
+        # Build the Cloud Billing V1 service client
+        billing_service = discovery.build(
+            "cloudbilling", "v1", credentials=creds, cache_discovery=False
+        )
+
+        billing_accounts = []
+
+        # List all billing accounts without parent filter
+        # This returns all billing accounts the user has permission to view
+        request = billing_service.billingAccounts().list()
+
+        # Handle pagination
+        while request is not None:
+            response = request.execute()
+
+            for account in response.get("billingAccounts", []):
+                # Extract billing account ID from resource name
+                # Format is "billingAccounts/012345-567890-ABCDEF"
+                billing_account_id = account["name"].split("/")[1]
+                display_name = account.get("displayName", billing_account_id)
+
+                billing_accounts.append(
+                    BillingAccount(id=billing_account_id, display_name=display_name)
+                )
+
+            # Get next page
+            request = billing_service.billingAccounts().list_next(
+                previous_request=request, previous_response=response
+            )
+
+        return billing_accounts
 
 
 # Singleton instance for representing "no organization"
