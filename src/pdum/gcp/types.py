@@ -18,6 +18,23 @@ if TYPE_CHECKING:
 
 
 @dataclass
+class BillingAccount:
+    """Information about a GCP billing account.
+
+    Attributes:
+        id: The billing account ID (e.g., "012345-567890-ABCDEF")
+        display_name: The human-readable display name for the billing account
+    """
+
+    id: str
+    display_name: str
+
+    def __bool__(self) -> bool:
+        """Return True for regular billing accounts."""
+        return True
+
+
+@dataclass
 class Container:
     """Base class for GCP resource containers (Organizations, Folders, and NO_ORG).
 
@@ -576,6 +593,62 @@ class Project:
         creds, _ = google.auth.default()
         return creds
 
+    def billing_account(self, credentials=None) -> BillingAccount:
+        """Get the billing account associated with this project.
+
+        This method retrieves the billing information for the project and returns
+        the associated billing account. If the project does not have a billing
+        account (billing is disabled or account is closed), returns NO_BILLING_ACCOUNT.
+
+        Args:
+            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+
+        Returns:
+            A BillingAccount object representing the billing account, or NO_BILLING_ACCOUNT
+            if the project has no billing account
+
+        Raises:
+            googleapiclient.errors.HttpError: If the API call fails
+
+        Example:
+            >>> project = org.projects()[0]
+            >>> billing = project.billing_account()
+            >>> if billing:
+            ...     print(f"Billing Account: {billing.display_name}")
+            ... else:
+            ...     print("No billing account")
+        """
+        creds = self._get_credentials(credentials)
+
+        # Build the Cloud Billing V1 service client
+        billing_service = discovery.build(
+            "cloudbilling", "v1", credentials=creds, cache_discovery=False
+        )
+
+        # Get the project's billing info
+        resource_name = f"projects/{self.id}"
+        billing_info = billing_service.projects().getBillingInfo(name=resource_name).execute()
+
+        # Check if billing is enabled and account exists
+        billing_enabled = billing_info.get("billingEnabled", False)
+        billing_account_name = billing_info.get("billingAccountName", "")
+
+        if not billing_enabled or not billing_account_name:
+            return NO_BILLING_ACCOUNT
+
+        # Extract the billing account ID from the resource name
+        # Format is "billingAccounts/012345-567890-ABCDEF"
+        billing_account_id = billing_account_name.split("/")[1]
+
+        # Get the billing account details to retrieve the display name
+        billing_account_info = (
+            billing_service.billingAccounts().get(name=billing_account_name).execute()
+        )
+
+        display_name = billing_account_info.get("displayName", billing_account_id)
+
+        return BillingAccount(id=billing_account_id, display_name=display_name)
+
     @classmethod
     def suggest_name(cls, *, prefix: Optional[str] = None, random_digits: int = 5) -> str:
         """Suggest a GCP project name with optional prefix and random digits.
@@ -807,3 +880,47 @@ class _NoOrgSentinel(Container):
 
 # Singleton instance for representing "no organization"
 NO_ORG = _NoOrgSentinel()
+
+
+class _NoBillingAccountSentinel(BillingAccount):
+    """Sentinel subclass of BillingAccount to represent projects with no billing account.
+
+    This sentinel is used to explicitly indicate that a project does not have a billing
+    account associated with it, or that the billing account is closed/disabled.
+
+    This is distinct from None, which might indicate "not yet fetched" or "unknown".
+
+    Being a subclass of BillingAccount allows it to be used uniformly in type hints
+    and isinstance checks.
+    """
+
+    _instance: Optional[_NoBillingAccountSentinel] = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            # Create instance without calling __init__ to avoid dataclass requirements
+            instance = object.__new__(cls)
+            # Manually set the BillingAccount fields
+            instance.id = ""
+            instance.display_name = "No Billing Account"
+            cls._instance = instance
+        return cls._instance
+
+    def __init__(self):
+        # Override __init__ to prevent dataclass __init__ from being called
+        # The instance is already initialized in __new__
+        pass
+
+    def __repr__(self) -> str:
+        return "NO_BILLING_ACCOUNT"
+
+    def __str__(self) -> str:
+        return "NO_BILLING_ACCOUNT"
+
+    def __bool__(self) -> bool:
+        # Always returns False so it can be used in boolean contexts
+        return False
+
+
+# Singleton instance for representing "no billing account"
+NO_BILLING_ACCOUNT = _NoBillingAccountSentinel()

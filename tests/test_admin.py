@@ -16,7 +16,15 @@ import os
 import pytest
 
 from pdum.gcp.admin import get_email, list_organizations
-from pdum.gcp.types import NO_ORG, Container, Folder, Organization, Project
+from pdum.gcp.types import (
+    NO_BILLING_ACCOUNT,
+    NO_ORG,
+    BillingAccount,
+    Container,
+    Folder,
+    Organization,
+    Project,
+)
 
 # Skip these tests in CI unless PDUM_GCP_MANUAL_TESTS environment variable is set
 manual_test = pytest.mark.skipif(
@@ -287,6 +295,8 @@ def test_types_module_imports():
     assert hasattr(types, "Folder")
     assert hasattr(types, "Project")
     assert hasattr(types, "NO_ORG")
+    assert hasattr(types, "BillingAccount")
+    assert hasattr(types, "NO_BILLING_ACCOUNT")
 
 
 def test_admin_functions_are_callable():
@@ -598,3 +608,91 @@ def test_tree_method_no_org():
     print()
     print("=" * 80)
     print("✓ tree() method executed successfully for NO_ORG")
+
+
+def test_billing_account_dataclass():
+    """Test that BillingAccount is a proper dataclass with expected attributes."""
+    # Create a test billing account
+    billing = BillingAccount(id="012345-567890-ABCDEF", display_name="Test Billing Account")
+
+    # Verify attributes
+    assert billing.id == "012345-567890-ABCDEF"
+    assert billing.display_name == "Test Billing Account"
+
+    # Verify it's a dataclass (has __dataclass_fields__)
+    assert hasattr(BillingAccount, "__dataclass_fields__")
+
+    # Verify regular billing accounts are truthy
+    assert billing
+    assert bool(billing) is True
+
+    print("✓ BillingAccount dataclass structure is correct")
+
+
+def test_no_billing_account_sentinel():
+    """Test that NO_BILLING_ACCOUNT is a proper sentinel and subclass of BillingAccount."""
+    # NO_BILLING_ACCOUNT should be an instance of BillingAccount
+    assert isinstance(NO_BILLING_ACCOUNT, BillingAccount)
+
+    # NO_BILLING_ACCOUNT should be a singleton (same object every time)
+    from pdum.gcp.types import NO_BILLING_ACCOUNT as NO_BILLING_ACCOUNT2
+
+    assert NO_BILLING_ACCOUNT is NO_BILLING_ACCOUNT2
+
+    # NO_BILLING_ACCOUNT should have BillingAccount attributes
+    assert hasattr(NO_BILLING_ACCOUNT, "id")
+    assert hasattr(NO_BILLING_ACCOUNT, "display_name")
+
+    # NO_BILLING_ACCOUNT should have expected values
+    assert NO_BILLING_ACCOUNT.id == ""
+    assert NO_BILLING_ACCOUNT.display_name == "No Billing Account"
+
+    # NO_BILLING_ACCOUNT should be falsy
+    assert not NO_BILLING_ACCOUNT
+    assert bool(NO_BILLING_ACCOUNT) is False
+
+    # NO_BILLING_ACCOUNT should have a clean string representation
+    assert str(NO_BILLING_ACCOUNT) == "NO_BILLING_ACCOUNT"
+    assert repr(NO_BILLING_ACCOUNT) == "NO_BILLING_ACCOUNT"
+
+
+def test_no_billing_account_is_not_regular_billing_account():
+    """Test that NO_BILLING_ACCOUNT is distinguishable from regular BillingAccounts."""
+    # Create regular billing account
+    regular_billing = BillingAccount(id="123456-ABCDEF-789012", display_name="My Billing Account")
+
+    # They should not be equal
+    assert NO_BILLING_ACCOUNT != regular_billing
+
+    # NO_BILLING_ACCOUNT is falsy, regular billing accounts are truthy
+    assert not NO_BILLING_ACCOUNT
+    assert regular_billing  # Regular dataclass instances are truthy
+
+    # NO_BILLING_ACCOUNT can be checked with identity
+    assert NO_BILLING_ACCOUNT is NO_BILLING_ACCOUNT
+    assert regular_billing is not NO_BILLING_ACCOUNT
+
+
+def test_billing_account_type_checking():
+    """Test that NO_BILLING_ACCOUNT works correctly with type checking patterns."""
+
+    def accept_billing_account(billing: BillingAccount) -> str:
+        """Function that accepts a BillingAccount (including NO_BILLING_ACCOUNT)."""
+        if billing is NO_BILLING_ACCOUNT:
+            return "no billing account"
+        return f"billing account: {billing.id}"
+
+    # NO_BILLING_ACCOUNT should be accepted by functions expecting BillingAccount
+    result = accept_billing_account(NO_BILLING_ACCOUNT)
+    assert result == "no billing account"
+
+    # Regular BillingAccount should also work
+    regular_billing = BillingAccount(id="123456-ABCDEF-789012", display_name="Test")
+    result = accept_billing_account(regular_billing)
+    assert result == "billing account: 123456-ABCDEF-789012"
+
+
+def test_project_has_billing_account_method():
+    """Test that Project has a billing_account() method."""
+    assert hasattr(Project, "billing_account")
+    assert callable(Project.billing_account)
