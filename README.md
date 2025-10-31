@@ -15,6 +15,7 @@ GCP utils
 The focus here is admin hygiene: inspecting estates, checking IAM, enabling required APIs, and wiring up billing or quota projects. Once the scaffolding exists, you drop back into the regular Google Cloud Python clients to actually use the resources. A core tenet is “bring your own identity”: everything runs under your Application Default Credentials, which belong to you, not the orgs you help. That makes this powerful, but also dangerous—misplaced trust, compromised credentials, or sloppy copy/paste can translate into real financial and operational damage.
 
 Use this library only if you:
+
 - Operate in small, high-trust environments where rapid create/tear-down cycles matter.
 - Regularly hop between organizations or short-lived projects.
 - Understand that you are working with loaded weapons and accept the risk.
