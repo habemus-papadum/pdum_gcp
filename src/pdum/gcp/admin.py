@@ -4,7 +4,6 @@ This module provides utilities for working with Google Cloud Application Default
 which automatically discovers credentials from the environment (gcloud CLI, service accounts, etc.).
 """
 
-import csv
 import difflib
 from pathlib import Path
 from typing import Generator, Optional
@@ -12,10 +11,12 @@ from typing import Generator, Optional
 import google.auth
 import google.auth.transport.requests
 from google.auth.credentials import Credentials
-from googleapiclient import discovery
-from googleapiclient.errors import HttpError
 
-from pdum.gcp.types import NO_ORG, APIResolutionError, Organization, Project
+from pdum.gcp._clients import crm_v1
+from pdum.gcp.types import APIResolutionError, Organization, Project
+
+# Cache for API map to avoid repeated file I/O
+_API_MAP_CACHE: dict[str, str] | None = None
 
 
 def get_email(*, credentials: Optional[Credentials] = None) -> str:
@@ -168,9 +169,7 @@ def list_organizations(*, credentials: Optional[Credentials] = None) -> list[Org
 
     # Build the Resource Manager V1 service client
     # The V1 API is required for listing organizations visible to the user
-    crm_service = discovery.build(
-        "cloudresourcemanager", "v1", credentials=credentials, cache_discovery=False
-    )
+    crm_service = crm_v1(credentials)
 
     organizations = []
 
@@ -208,14 +207,16 @@ def list_organizations(*, credentials: Optional[Credentials] = None) -> list[Org
     return organizations
 
 
-def quota_project(*, credentials: Optional[Credentials] = None) -> Project:
+def quota_project(*, credentials: Optional[Credentials] = None, project_id: Optional[str] = None) -> Project:
     """Return the quota (billing) project inferred from the environment.
 
     Parameters
     ----------
     credentials : Credentials, optional
-        Explicit credentials to use for API calls. The project id is still
-        derived from the environment or platform metadata.
+        Explicit credentials to use for API calls.
+    project_id : str, optional
+        Explicit project id to use. If omitted, derives from the environment
+        or platform metadata via ADC.
 
     Returns
     -------
@@ -237,11 +238,13 @@ def quota_project(*, credentials: Optional[Credentials] = None) -> Project:
     >>> quota_project()  # doctest: +SKIP
     Project(id='my-project-123', ...)
     """
-    # Get credentials and project ID from Application Default Credentials
+    # Resolve credentials if not provided
     if credentials is None:
-        credentials, project_id = google.auth.default()
-    else:
-        # If credentials are provided, still need to determine the project ID from environment
+        credentials, _ = google.auth.default()
+
+    # Determine project id
+    if project_id is None:
+        # Derive from environment/metadata
         _, project_id = google.auth.default()
 
     # Validate that we got a project ID
@@ -314,6 +317,11 @@ def _load_api_map() -> dict[str, str]:
     FileNotFoundError
         If the bundled map file is missing.
     """
+    # Serve from cache if already loaded
+    global _API_MAP_CACHE
+    if _API_MAP_CACHE is not None:
+        return _API_MAP_CACHE
+
     # Find the text file in the package data directory
     package_dir = Path(__file__).parent
     txt_path = package_dir / "data" / "api_map.txt"
@@ -328,7 +336,7 @@ def _load_api_map() -> dict[str, str]:
 
     with open(txt_path, "r", encoding="utf-8") as f:
         # Skip the header line (NAME TITLE)
-        header = f.readline()
+        f.readline()
 
         for line in f:
             line = line.strip()
@@ -345,6 +353,7 @@ def _load_api_map() -> dict[str, str]:
                 if "googleapis.com" in service_id:
                     api_map[display_name] = service_id
 
+    _API_MAP_CACHE = api_map
     return api_map
 
 

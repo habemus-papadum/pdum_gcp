@@ -157,6 +157,13 @@ If you think a version change is needed, inform the user but do not make the cha
 
 If the user needs to make a release, explain the process but let them run the script themselves.
 
+## Style & Testing Principles (Quick)
+
+- Prefer NumPy-style docstrings with clear Parameters/Returns/Raises and small, illustrative examples.
+- Keep optional parameters keyword-only (e.g., `*, credentials=None`).
+- Centralize shared concerns (e.g., service clients) in private helpers to reduce duplication.
+- Avoid mocks in tests. Prefer CI-safe unit tests that exercise real code paths without network calls (e.g., using bundled data files). Use manual tests (opt-in) for live API checks.
+
 ## Researching Google Cloud APIs
 
 **ALWAYS research the exact API format before implementing GCP functionality.**

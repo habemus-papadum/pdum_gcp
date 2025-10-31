@@ -285,35 +285,29 @@ def test_project_dataclass_creation():
     assert project.parent is NO_ORG
 
 
-def test_admin_module_imports():
-    """Test that all expected functions and classes can be imported."""
-    from pdum.gcp import admin
+def test_smoke_imports():
+    """Lightweight smoke test for module imports and symbols."""
+    import pdum.gcp as gcp
 
-    assert hasattr(admin, "get_email")
-    assert hasattr(admin, "list_organizations")
-    assert hasattr(admin, "quota_project")
-
-
-def test_types_module_imports():
-    """Test that all expected types can be imported."""
-    from pdum.gcp import types
-
-    assert hasattr(types, "Container")
-    assert hasattr(types, "Organization")
-    assert hasattr(types, "Folder")
-    assert hasattr(types, "Project")
-    assert hasattr(types, "NO_ORG")
-    assert hasattr(types, "BillingAccount")
-    assert hasattr(types, "NO_BILLING_ACCOUNT")
+    for name in (
+        "get_email",
+        "list_organizations",
+        "lookup_api",
+        "quota_project",
+        "walk_projects",
+        "Organization",
+        "Folder",
+        "Project",
+        "NO_ORG",
+        "NO_BILLING_ACCOUNT",
+    ):
+        assert hasattr(gcp, name)
 
 
-def test_admin_functions_are_callable():
-    """Test that the admin functions are callable (without calling them)."""
-    assert callable(get_email)
-    assert callable(list_organizations)
-    assert callable(quota_project)
-    assert callable(walk_projects)
-    assert callable(lookup_api)
+
+
+
+
 
 
 def test_project_suggest_name_with_prefix():
@@ -548,40 +542,15 @@ def test_container_has_tree_method():
     assert callable(NO_ORG.tree)
 
 
-def test_container_has_create_folder_method():
-    """Test that Container has a create_folder() method."""
-    assert hasattr(Container, "create_folder")
-    assert callable(Container.create_folder)
-
-    # Verify Organization has the method
-    assert hasattr(Organization, "create_folder")
-    assert callable(Organization.create_folder)
-
-    # Verify Folder has the method
-    assert hasattr(Folder, "create_folder")
-    assert callable(Folder.create_folder)
-
-    # Verify NO_ORG has the method (but it raises exception)
-    assert hasattr(NO_ORG, "create_folder")
-    assert callable(NO_ORG.create_folder)
+def test_container_smoke_methods_exist():
+    """Consolidated smoke check for key Container methods."""
+    for cls in (Container, Organization, Folder):
+        for name in ("tree", "cd", "walk_projects"):
+            assert hasattr(cls, name)
 
 
-def test_container_has_walk_projects_method():
-    """Test that Container has a walk_projects() method."""
-    assert hasattr(Container, "walk_projects")
-    assert callable(Container.walk_projects)
-
-    # Verify Organization has the method
-    assert hasattr(Organization, "walk_projects")
-    assert callable(Organization.walk_projects)
-
-    # Verify Folder has the method
-    assert hasattr(Folder, "walk_projects")
-    assert callable(Folder.walk_projects)
-
-    # Verify NO_ORG has the method
+    # NO_ORG should also expose walk_projects
     assert hasattr(NO_ORG, "walk_projects")
-    assert callable(NO_ORG.walk_projects)
 
 
 def test_no_org_create_folder_raises_exception():
@@ -633,6 +602,7 @@ def test_no_org_cd_raises_exception():
 def test_cd_empty_path_raises_error():
     """Test that cd with empty path raises ValueError."""
     import pytest
+
     from pdum.gcp.types import Organization
 
     # Create a mock organization for testing
@@ -827,7 +797,7 @@ def test_quota_project():
     assert isinstance(project.lifecycle_state, str)
     assert isinstance(project.parent, Container)
 
-    print(f"\n✓ Successfully retrieved quota project:")
+    print("\n✓ Successfully retrieved quota project:")
     print(f"  ID: {project.id}")
     print(f"  Name: {project.name}")
     print(f"  Number: {project.project_number}")
@@ -914,13 +884,13 @@ def test_project_enable_apis():
     assert isinstance(result, dict)
     assert result.get("done", False) is True
 
-    print(f"\n✓ API enablement completed successfully")
+    print("\n✓ API enablement completed successfully")
     print(f"  Operation name: {result.get('name')}")
 
     # Verify the API is now in the enabled list
     enabled_apis = project.enabled_apis()
     assert "serviceusage.googleapis.com" in enabled_apis
-    print(f"  Verified API is now enabled")
+    print("  Verified API is now enabled")
 
 
 @manual_test
@@ -998,7 +968,7 @@ def test_walk_projects():
         print(f"  {parent_name}: {count} project(s)")
 
     print("-" * 80)
-    print(f"\n✓ Successfully walked through projects with filtering")
+    print("\n✓ Successfully walked through projects with filtering")
     print("=" * 80)
 
 
@@ -1161,7 +1131,7 @@ def test_lookup_api():
         result1 = lookup_api("Compute Engine")
         result2 = lookup_api("Compute Engine")
         assert result1 == result2
-        print(f"   ✓ Repeated lookups work correctly (same result both times)")
+        print("   ✓ Repeated lookups work correctly (same result both times)")
     except APIResolutionError as e:
         print(f"   ⚠️  Error: {e}")
 

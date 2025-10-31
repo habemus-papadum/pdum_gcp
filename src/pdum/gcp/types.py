@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING, Generator, Optional
 
 import google.auth
 from google.auth.credentials import Credentials
-from googleapiclient import discovery
+
+from pdum.gcp._clients import cloud_billing, crm_v1, crm_v2, service_usage
 
 if TYPE_CHECKING:
     pass
@@ -214,31 +215,8 @@ class Container:
         # Print the current container
         print(f"{_prefix}{emoji} {self.display_name} ({self.resource_name})")
 
-        # Get all folders and projects
-        folders = self.folders(credentials=creds)
-        projects = self.projects(credentials=creds)
-
-        # Combine them for processing
-        all_children = folders + projects
-        total_children = len(all_children)
-
-        # Process each child
-        for idx, child in enumerate(all_children):
-            is_last_child = idx == total_children - 1
-
-            if isinstance(child, Project):
-                # Print project - each project is a musical note!
-                branch = "└── " if is_last_child else "├── "
-                print(f"{_prefix}{branch}🎵 {child.id} ({child.lifecycle_state})")
-            else:
-                # Print folder recursively
-                branch = "└── " if is_last_child else "├── "
-                extension = "    " if is_last_child else "│   "
-                new_prefix = _prefix + extension
-
-                print(f"{_prefix}{branch}🎸 {child.display_name} ({child.resource_name})")
-                # Recursively print the folder's children
-                child._tree_children(credentials=creds, _prefix=new_prefix)
+        # Delegate printing of children to the shared helper
+        self._tree_children(credentials=creds, _prefix=_prefix)
 
     def _tree_children(self, *, credentials=None, _prefix: str = "") -> None:
         """Internal helper to print children without printing the parent again.
@@ -369,19 +347,21 @@ class Organization(Container):
         return None
 
     def folders(self, *, credentials=None) -> list[Folder]:
-        """List folders that are direct children of this organization.
+        """List direct child folders of this organization.
 
-        Args:
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
 
-        Returns:
-            List of Folder objects that are direct children of this organization
+        Returns
+        -------
+        list[Folder]
+            Direct child folders of this organization.
         """
         creds = self._get_credentials(credentials=credentials)
 
-        crm_service = discovery.build(
-            "cloudresourcemanager", "v2", credentials=creds, cache_discovery=False
-        )
+        crm_service = crm_v2(creds)
 
         folders = []
         request = crm_service.folders().list(parent=self.resource_name)
@@ -406,19 +386,21 @@ class Organization(Container):
         return folders
 
     def projects(self, *, credentials=None) -> list[Project]:
-        """List projects that are direct children of this organization.
+        """List direct child projects of this organization.
 
-        Args:
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
 
-        Returns:
-            List of Project objects that are direct children of this organization
+        Returns
+        -------
+        list[Project]
+            Direct child projects of this organization.
         """
         creds = self._get_credentials(credentials=credentials)
 
-        crm_service = discovery.build(
-            "cloudresourcemanager", "v1", credentials=creds, cache_discovery=False
-        )
+        crm_service = crm_v1(creds)
 
         projects = []
         # Filter projects by parent organization
@@ -440,23 +422,28 @@ class Organization(Container):
         return projects
 
     def create_folder(self, display_name: str, *, credentials=None) -> Folder:
-        """Create a new folder as a child of this organization.
+        """Create a folder directly under this organization.
 
-        Args:
-            display_name: The human-readable name for the folder
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+        Parameters
+        ----------
+        display_name : str
+            The display name for the new folder.
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
 
-        Returns:
-            A Folder object representing the newly created folder
+        Returns
+        -------
+        Folder
+            The created folder resource.
 
-        Raises:
-            googleapiclient.errors.HttpError: If the API call fails
+        Raises
+        ------
+        googleapiclient.errors.HttpError
+            If the API call fails.
         """
         creds = self._get_credentials(credentials=credentials)
 
-        crm_service = discovery.build(
-            "cloudresourcemanager", "v2", credentials=creds, cache_discovery=False
-        )
+        crm_service = crm_v2(creds)
 
         # Create folder request body
         # Note: parent is passed as a parameter, not in the body
@@ -519,9 +506,7 @@ class Organization(Container):
         creds = self._get_credentials(credentials=credentials)
 
         # Build the Cloud Billing V1 service client
-        billing_service = discovery.build(
-            "cloudbilling", "v1", credentials=creds, cache_discovery=False
-        )
+        billing_service = cloud_billing(creds)
 
         billing_accounts = []
 
@@ -551,36 +536,31 @@ class Organization(Container):
 
     @classmethod
     def lookup(cls, org_id: str, *, credentials: Optional[Credentials] = None) -> "Organization":
-        """Look up an organization by its organization ID.
+        """Return an Organization by id using CRM v1.
 
-        This method fetches the organization details from the Cloud Resource Manager API
-        and returns an Organization object.
+        Parameters
+        ----------
+        org_id : str
+            Numeric organization id (e.g., ``"123456789"``).
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses ADC.
 
-        Args:
-            org_id: The organization ID (numeric string, e.g., "123456789")
-            credentials: Google Cloud credentials to use. If None, uses Application Default Credentials.
+        Returns
+        -------
+        Organization
+            Populated organization resource.
 
-        Returns:
-            An Organization object representing the organization
-
-        Raises:
-            google.auth.exceptions.DefaultCredentialsError: If no credentials can be found
-            googleapiclient.errors.HttpError: If the API call fails (e.g., organization not found)
-
-        Example:
-            >>> from pdum.gcp import Organization
-            >>> org = Organization.lookup("123456789")
-            >>> print(f"Organization: {org.display_name}")
-            Organization: My Organization
+        Raises
+        ------
+        googleapiclient.errors.HttpError
+            If the organization is not found or the API call fails.
         """
         # Get credentials if not provided
         if credentials is None:
             credentials, _ = google.auth.default()
 
         # Build the Resource Manager V1 service client
-        crm_service = discovery.build(
-            "cloudresourcemanager", "v1", credentials=credentials, cache_discovery=False
-        )
+        crm_service = crm_v1(credentials)
 
         # Get the organization details
         resource_name = f"organizations/{org_id}"
@@ -626,9 +606,7 @@ class Folder(Container):
         # Parse the parent resource name
         if self.parent_resource_name.startswith("organizations/"):
             org_id = self.parent_resource_name.split("/")[1]
-            crm_service = discovery.build(
-                "cloudresourcemanager", "v1", credentials=creds, cache_discovery=False
-            )
+            crm_service = crm_v1(creds)
 
             org = crm_service.organizations().get(name=self.parent_resource_name).execute()
             return Organization(
@@ -639,9 +617,7 @@ class Folder(Container):
             )
         elif self.parent_resource_name.startswith("folders/"):
             folder_id = self.parent_resource_name.split("/")[1]
-            crm_service = discovery.build(
-                "cloudresourcemanager", "v2", credentials=creds, cache_discovery=False
-            )
+            crm_service = crm_v2(creds)
 
             folder = crm_service.folders().get(name=self.parent_resource_name).execute()
             return Folder(
@@ -655,19 +631,21 @@ class Folder(Container):
         return None
 
     def folders(self, *, credentials=None) -> list[Folder]:
-        """List folders that are direct children of this folder.
+        """List direct child folders of this folder.
 
-        Args:
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
 
-        Returns:
-            List of Folder objects that are direct children of this folder
+        Returns
+        -------
+        list[Folder]
+            Direct child folders of this folder.
         """
         creds = self._get_credentials(credentials=credentials)
 
-        crm_service = discovery.build(
-            "cloudresourcemanager", "v2", credentials=creds, cache_discovery=False
-        )
+        crm_service = crm_v2(creds)
 
         folders = []
         request = crm_service.folders().list(parent=self.resource_name)
@@ -692,19 +670,21 @@ class Folder(Container):
         return folders
 
     def projects(self, *, credentials=None) -> list[Project]:
-        """List projects that are direct children of this folder.
+        """List direct child projects of this folder.
 
-        Args:
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
 
-        Returns:
-            List of Project objects that are direct children of this folder
+        Returns
+        -------
+        list[Project]
+            Direct child projects of this folder.
         """
         creds = self._get_credentials(credentials=credentials)
 
-        crm_service = discovery.build(
-            "cloudresourcemanager", "v1", credentials=creds, cache_discovery=False
-        )
+        crm_service = crm_v1(creds)
 
         projects = []
         # Filter projects by parent folder
@@ -724,23 +704,28 @@ class Folder(Container):
         return projects
 
     def create_folder(self, display_name: str, *, credentials=None) -> Folder:
-        """Create a new folder as a child of this folder.
+        """Create a folder directly under this folder.
 
-        Args:
-            display_name: The human-readable name for the folder
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+        Parameters
+        ----------
+        display_name : str
+            The display name for the new folder.
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
 
-        Returns:
-            A Folder object representing the newly created folder
+        Returns
+        -------
+        Folder
+            The created folder resource.
 
-        Raises:
-            googleapiclient.errors.HttpError: If the API call fails
+        Raises
+        ------
+        googleapiclient.errors.HttpError
+            If the API call fails.
         """
         creds = self._get_credentials(credentials=credentials)
 
-        crm_service = discovery.build(
-            "cloudresourcemanager", "v2", credentials=creds, cache_discovery=False
-        )
+        crm_service = crm_v2(creds)
 
         # Create folder request body
         # Note: parent is passed as a parameter, not in the body
@@ -840,15 +825,13 @@ class Project:
         creds = self._get_credentials(credentials=credentials)
 
         # Build the Service Usage V1 service client
-        service_usage = discovery.build(
-            "serviceusage", "v1", credentials=creds, cache_discovery=False
-        )
+        service_usage_client = service_usage(creds)
 
         enabled_apis = []
 
         # List services with filter for enabled state
         parent_name = f"projects/{self.id}"
-        request = service_usage.services().list(parent=parent_name, filter="state:ENABLED")
+        request = service_usage_client.services().list(parent=parent_name, filter="state:ENABLED")
 
         # Handle pagination
         while request is not None:
@@ -862,7 +845,7 @@ class Project:
                     enabled_apis.append(api_name)
 
             # Get next page
-            request = service_usage.services().list_next(
+            request = service_usage_client.services().list_next(
                 previous_request=request, previous_response=response
             )
 
@@ -879,41 +862,41 @@ class Project:
     ) -> dict:
         """Enable multiple APIs for this project using batch enable.
 
-        This method enables multiple APIs/services for the project in a single operation.
-        It polls the long-running operation until completion or timeout. The user must have
-        the "Service Usage Admin" role or appropriate permissions to enable services.
+        Polls the long-running operation until completion or timeout.
 
-        Args:
-            api_list: List of API service names to enable (e.g., ['compute.googleapis.com', 'storage.googleapis.com'])
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
-            timeout: Maximum time in seconds to wait for operation completion. Defaults to 300 (5 minutes).
-            verbose: If True, prints a dot (.) for each polling attempt. Defaults to True.
-            polling_interval: Time in seconds between polling attempts. Defaults to 5.0.
+        Parameters
+        ----------
+        api_list : list[str]
+            Service ids to enable.
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
+        timeout : float, default 300.0
+            Maximum number of seconds to wait for completion.
+        verbose : bool, default True
+            If ``True``, prints progress dots while polling.
+        polling_interval : float, default 5.0
+            Seconds between polls.
 
-        Returns:
-            The completed operation response as a dictionary
+        Returns
+        -------
+        dict
+            The completed operation resource.
 
-        Raises:
-            googleapiclient.errors.HttpError: If the API call fails
-            TimeoutError: If the operation doesn't complete within the timeout period
-            RuntimeError: If the operation fails with an error
-
-        Example:
-            >>> project = quota_project()
-            >>> apis_to_enable = ['compute.googleapis.com', 'storage.googleapis.com']
-            >>> result = project.enable_apis(apis_to_enable)
-            >>> print("APIs enabled successfully")
-            APIs enabled successfully
+        Raises
+        ------
+        googleapiclient.errors.HttpError
+            If the API call fails.
+        TimeoutError
+            If the operation times out.
+        RuntimeError
+            If the operation completes with an error status.
         """
-        import sys
         import time
 
         creds = self._get_credentials(credentials=credentials)
 
         # Build the Service Usage V1 service client
-        service_usage = discovery.build(
-            "serviceusage", "v1", credentials=creds, cache_discovery=False
-        )
+        service_usage_client = service_usage(creds)
 
         # Prepare the batch enable request
         parent_name = f"projects/{self.id}"
@@ -921,7 +904,7 @@ class Project:
 
         # Call batchEnable to initiate the operation
         operation = (
-            service_usage.services()
+            service_usage_client.services()
             .batchEnable(parent=parent_name, body=request_body)
             .execute()
         )
@@ -949,7 +932,7 @@ class Project:
                 )
 
             # Get operation status
-            operation = service_usage.operations().get(name=operation_name).execute()
+            operation = service_usage_client.operations().get(name=operation_name).execute()
 
             # Check if operation is done
             if operation.get("done", False):
@@ -976,36 +959,36 @@ class Project:
             time.sleep(polling_interval)
 
     def billing_account(self, *, credentials=None) -> BillingAccount:
-        """Get the billing account associated with this project.
+        """Return the project's billing account or ``NO_BILLING_ACCOUNT``.
 
-        This method retrieves the billing information for the project and returns
-        the associated billing account. If the project does not have a billing
-        account (billing is disabled or account is closed), returns NO_BILLING_ACCOUNT.
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
 
-        Args:
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+        Returns
+        -------
+        BillingAccount
+            The associated billing account, or the ``NO_BILLING_ACCOUNT`` sentinel
+            if billing is disabled or no account is linked.
 
-        Returns:
-            A BillingAccount object representing the billing account, or NO_BILLING_ACCOUNT
-            if the project has no billing account
+        Raises
+        ------
+        googleapiclient.errors.HttpError
+            If the API call fails.
 
-        Raises:
-            googleapiclient.errors.HttpError: If the API call fails
-
-        Example:
-            >>> project = org.projects()[0]
-            >>> billing = project.billing_account()
-            >>> if billing:
-            ...     print(f"Billing Account: {billing.display_name}")
-            ... else:
-            ...     print("No billing account")
+        Examples
+        --------
+        >>> project = Project(  # doctest: +SKIP
+        ...     id='x', name='x', project_number='1', lifecycle_state='ACTIVE', parent=NO_ORG
+        ... )
+        >>> project.billing_account()  # doctest: +SKIP
+        NO_BILLING_ACCOUNT
         """
         creds = self._get_credentials(credentials=credentials)
 
         # Build the Cloud Billing V1 service client
-        billing_service = discovery.build(
-            "cloudbilling", "v1", credentials=creds, cache_discovery=False
-        )
+        billing_service = cloud_billing(creds)
 
         # Get the project's billing info
         resource_name = f"projects/{self.id}"
@@ -1033,36 +1016,31 @@ class Project:
 
     @classmethod
     def lookup(cls, project_id: str, *, credentials: Optional[Credentials] = None) -> "Project":
-        """Look up a project by its project ID.
+        """Return a Project by id using CRM v1 and resolve its parent.
 
-        This method fetches the full project details from the Cloud Resource Manager API
-        and returns a Project object with the project's parent container resolved.
+        Parameters
+        ----------
+        project_id : str
+            Project id (e.g., ``"my-project-123"``).
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses ADC.
 
-        Args:
-            project_id: The project ID (e.g., "my-project-123")
-            credentials: Google Cloud credentials to use. If None, uses Application Default Credentials.
+        Returns
+        -------
+        Project
+            Populated project with parent Container (Organization, Folder, or NO_ORG).
 
-        Returns:
-            A Project object representing the project
-
-        Raises:
-            google.auth.exceptions.DefaultCredentialsError: If no credentials can be found
-            googleapiclient.errors.HttpError: If the API call fails (e.g., project not found)
-
-        Example:
-            >>> from pdum.gcp import Project
-            >>> project = Project.lookup("my-project-123")
-            >>> print(f"Project: {project.name} (parent: {project.parent.display_name})")
-            Project: My Project (parent: My Organization)
+        Raises
+        ------
+        googleapiclient.errors.HttpError
+            If the project is not found or the API call fails.
         """
         # Get credentials if not provided
         if credentials is None:
             credentials, _ = google.auth.default()
 
         # Build the Resource Manager V1 service client
-        crm_service = discovery.build(
-            "cloudresourcemanager", "v1", credentials=credentials, cache_discovery=False
-        )
+        crm_service = crm_v1(credentials)
 
         # Get the project details
         project_resource = crm_service.projects().get(projectId=project_id).execute()
@@ -1085,9 +1063,7 @@ class Project:
         elif parent_type == "folder":
             parent_resource_name = f"folders/{parent_id}"
             # Get folder details using CRM v2 API
-            crm_v2_service = discovery.build(
-                "cloudresourcemanager", "v2", credentials=credentials, cache_discovery=False
-            )
+            crm_v2_service = crm_v2(credentials)
             folder_resource = crm_v2_service.folders().get(name=parent_resource_name).execute()
             parent = Folder(
                 id=parent_id,
@@ -1115,39 +1091,33 @@ class Project:
 
     @classmethod
     def suggest_name(cls, *, prefix: Optional[str] = None, random_digits: int = 5) -> str:
-        """Suggest a GCP project name with optional prefix and random digits.
+        """Suggest a valid GCP project id using an optional prefix.
 
-        This method generates project names that follow GCP naming conventions:
-        - Must be 6-30 characters long
-        - Can only contain lowercase letters, digits, and hyphens
-        - Must start with a lowercase letter
+        Generates names that follow GCP conventions:
+        6–30 characters, lowercase letters, digits, and hyphens; must start with
+        a lowercase letter.
 
-        Args:
-            prefix: Optional prefix for the project name. If None, generates a coolname
-                   (adjective-animal format like "quick-fox"). If provided, must start
-                   with a lowercase letter.
-            random_digits: Number of random digits to append (0-10). Defaults to 5.
-                          If > 0, appends a dash followed by the specified number of
-                          random digits.
+        Parameters
+        ----------
+        prefix : str, optional
+            If provided, used as the leading component (must start with a
+            lowercase letter). If omitted, an adjective-animal slug is generated.
+        random_digits : int, default 5
+            Number of random digits to append (0–10). If 0, no digits are appended.
 
-        Returns:
-            A suggested project name string
+        Returns
+        -------
+        str
+            A suggested project id string.
 
-        Raises:
-            ValueError: If prefix doesn't start with a lowercase letter, or if
-                       random_digits is not between 0-10
-
-        Example:
-            >>> Project.suggest_name()
-            'quick-fox-12345'
-            >>> Project.suggest_name(prefix='myapp')
-            'myapp-67890'
-            >>> Project.suggest_name(prefix='myapp', random_digits=0)
-            'myapp'
-            >>> Project.suggest_name(prefix='myapp', random_digits=8)
-            'myapp-12345678'
+        Raises
+        ------
+        ValueError
+            If ``prefix`` is invalid or ``random_digits`` is outside 0–10, or the
+            final length violates GCP limits.
         """
         import random
+
         import coolname
 
         # Validate random_digits
@@ -1331,9 +1301,7 @@ class _NoOrgSentinel(Container):
         """
         creds = self._get_credentials(credentials=credentials)
 
-        crm_service = discovery.build(
-            "cloudresourcemanager", "v1", credentials=creds, cache_discovery=False
-        )
+        crm_service = crm_v1(creds)
 
         projects = []
         request = crm_service.projects().list()
@@ -1396,9 +1364,7 @@ class _NoOrgSentinel(Container):
         creds = self._get_credentials(credentials=credentials)
 
         # Build the Cloud Billing V1 service client
-        billing_service = discovery.build(
-            "cloudbilling", "v1", credentials=creds, cache_discovery=False
-        )
+        billing_service = cloud_billing(creds)
 
         billing_accounts = []
 
