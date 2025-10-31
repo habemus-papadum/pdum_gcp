@@ -1,8 +1,8 @@
 site_name: gcp
 site_description: Utilities and tools for Google Cloud
 site_author: Nehal Patel
-repo_url: https://github.com/habemus-papadum/gcp
-repo_name: gcp
+repo_url: https://github.com/habemus-papadum/pdum_gcp
+repo_name: pdum_gcp
 
 theme:
   name: "material"
