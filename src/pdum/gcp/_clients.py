@@ -16,9 +16,9 @@ def crm_v1(credentials: Credentials):
     return discovery.build("cloudresourcemanager", "v1", credentials=credentials, cache_discovery=False)
 
 
-def crm_v2(credentials: Credentials):
-    """Cloud Resource Manager v2 service client."""
-    return discovery.build("cloudresourcemanager", "v2", credentials=credentials, cache_discovery=False)
+def crm_v3(credentials: Credentials):
+    """Cloud Resource Manager v3 service client."""
+    return discovery.build("cloudresourcemanager", "v3", credentials=credentials, cache_discovery=False)
 
 
 def service_usage(credentials: Credentials):

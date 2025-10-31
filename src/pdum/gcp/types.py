@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Generator, Optional
 import google.auth
 from google.auth.credentials import Credentials
 
-from pdum.gcp._clients import cloud_billing, crm_v1, crm_v2, service_usage
+from pdum.gcp._clients import cloud_billing, crm_v1, crm_v3, service_usage
 
 if TYPE_CHECKING:
     pass
@@ -22,6 +22,21 @@ class APIResolutionError(Exception):
     """Raised when an API display name cannot be uniquely resolved to a service ID."""
 
     pass
+
+
+@dataclass
+class Role:
+    """Information about an IAM role.
+
+    Attributes:
+        name: The role name (e.g., "roles/owner")
+        title: The human-readable role title
+        description: A description of the role
+    """
+
+    name: str
+    title: str
+    description: str
 
 
 @dataclass
@@ -361,7 +376,7 @@ class Organization(Container):
         """
         creds = self._get_credentials(credentials=credentials)
 
-        crm_service = crm_v2(creds)
+        crm_service = crm_v3(creds)
 
         folders = []
         request = crm_service.folders().list(parent=self.resource_name)
@@ -400,13 +415,11 @@ class Organization(Container):
         """
         creds = self._get_credentials(credentials=credentials)
 
-        crm_service = crm_v1(creds)
+        crm_service = crm_v3(creds)
 
         projects = []
         # Filter projects by parent organization
-        request = crm_service.projects().list(
-            filter=f"parent.type:organization parent.id:{self.id}"
-        )
+        request = crm_service.projects().list(parent=self.resource_name)
 
         while request is not None:
             response = request.execute()
@@ -421,7 +434,7 @@ class Organization(Container):
 
         return projects
 
-    def create_folder(self, display_name: str, *, credentials=None) -> Folder:
+    def create_folder(self, display_name: str, *, credentials=None) -> "Folder":
         """Create a folder directly under this organization.
 
         Parameters
@@ -443,19 +456,17 @@ class Organization(Container):
         """
         creds = self._get_credentials(credentials=credentials)
 
-        crm_service = crm_v2(creds)
+        crm_service = crm_v3(creds)
 
         # Create folder request body
-        # Note: parent is passed as a parameter, not in the body
         folder_body = {
             "displayName": display_name,
+            "parent": self.resource_name,
         }
 
         # Call the folders.create() method
-        # parent parameter is required and separate from the body
         operation = crm_service.folders().create(
-            body=folder_body,
-            parent=self.resource_name
+            body=folder_body
         ).execute()
 
         # Wait for the operation to complete (folders.create returns a long-running operation)
@@ -536,7 +547,7 @@ class Organization(Container):
 
     @classmethod
     def lookup(cls, org_id: str, *, credentials: Optional[Credentials] = None) -> "Organization":
-        """Return an Organization by id using CRM v1.
+        """Return an Organization by id using CRM v3.
 
         Parameters
         ----------
@@ -559,8 +570,8 @@ class Organization(Container):
         if credentials is None:
             credentials, _ = google.auth.default()
 
-        # Build the Resource Manager V1 service client
-        crm_service = crm_v1(credentials)
+        # Build the Resource Manager V3 service client
+        crm_service = crm_v3(credentials)
 
         # Get the organization details
         resource_name = f"organizations/{org_id}"
@@ -602,29 +613,19 @@ class Folder(Container):
             return None
 
         creds = self._get_credentials(credentials=credentials)
+        crm_service = crm_v3(creds)
 
         # Parse the parent resource name
         if self.parent_resource_name.startswith("organizations/"):
             org_id = self.parent_resource_name.split("/")[1]
-            crm_service = crm_v1(creds)
-
-            org = crm_service.organizations().get(name=self.parent_resource_name).execute()
-            return Organization(
-                id=org_id,
-                resource_name=self.parent_resource_name,
-                display_name=org.get("displayName", ""),
-                _credentials=creds,
-            )
+            return Organization.lookup(org_id, credentials=creds)
         elif self.parent_resource_name.startswith("folders/"):
-            folder_id = self.parent_resource_name.split("/")[1]
-            crm_service = crm_v2(creds)
-
-            folder = crm_service.folders().get(name=self.parent_resource_name).execute()
+            folder_resource = crm_service.folders().get(name=self.parent_resource_name).execute()
             return Folder(
-                id=folder_id,
-                resource_name=self.parent_resource_name,
-                display_name=folder.get("displayName", ""),
-                parent_resource_name=folder.get("parent", ""),
+                id=folder_resource["name"].split("/")[1],
+                resource_name=folder_resource["name"],
+                display_name=folder_resource.get("displayName", ""),
+                parent_resource_name=folder_resource.get("parent", ""),
                 _credentials=creds,
             )
 
@@ -645,7 +646,7 @@ class Folder(Container):
         """
         creds = self._get_credentials(credentials=credentials)
 
-        crm_service = crm_v2(creds)
+        crm_service = crm_v3(creds)
 
         folders = []
         request = crm_service.folders().list(parent=self.resource_name)
@@ -684,11 +685,11 @@ class Folder(Container):
         """
         creds = self._get_credentials(credentials=credentials)
 
-        crm_service = crm_v1(creds)
+        crm_service = crm_v3(creds)
 
         projects = []
         # Filter projects by parent folder
-        request = crm_service.projects().list(filter=f"parent.type:folder parent.id:{self.id}")
+        request = crm_service.projects().list(parent=self.resource_name)
 
         while request is not None:
             response = request.execute()
@@ -725,19 +726,17 @@ class Folder(Container):
         """
         creds = self._get_credentials(credentials=credentials)
 
-        crm_service = crm_v2(creds)
+        crm_service = crm_v3(creds)
 
         # Create folder request body
-        # Note: parent is passed as a parameter, not in the body
         folder_body = {
             "displayName": display_name,
+            "parent": self.resource_name,
         }
 
         # Call the folders.create() method
-        # parent parameter is required and separate from the body
         operation = crm_service.folders().create(
-            body=folder_body,
-            parent=self.resource_name
+            body=folder_body
         ).execute()
 
         # Wait for the operation to complete (folders.create returns a long-running operation)
@@ -1016,7 +1015,7 @@ class Project:
 
     @classmethod
     def lookup(cls, project_id: str, *, credentials: Optional[Credentials] = None) -> "Project":
-        """Return a Project by id using CRM v1 and resolve its parent.
+        """Return a Project by id using CRM v3 and resolve its parent.
 
         Parameters
         ----------
@@ -1034,47 +1033,49 @@ class Project:
         ------
         googleapiclient.errors.HttpError
             If the project is not found or the API call fails.
+        FileNotFoundError
+            If the project is not found.
+        ValueError
+            If multiple projects are found for the given ID.
         """
         # Get credentials if not provided
         if credentials is None:
             credentials, _ = google.auth.default()
 
-        # Build the Resource Manager V1 service client
-        crm_service = crm_v1(credentials)
+        # Build the Resource Manager V3 service client
+        crm_service = crm_v3(credentials)
 
-        # Get the project details
-        project_resource = crm_service.projects().get(projectId=project_id).execute()
+        # Search for the project by its ID
+        request = crm_service.projects().search(query=f"id:{project_id}")
+        response = request.execute()
+
+        projects = response.get("projects", [])
+        if not projects:
+            raise FileNotFoundError(f"Project with ID '{project_id}' not found.")
+        if len(projects) > 1:
+            # This should not happen for a project ID search, but handle it just in case
+            raise ValueError(f"Found multiple projects with ID '{project_id}'.")
+
+        project_resource = projects[0]
 
         # Determine the parent container
-        parent_info = project_resource.get("parent", {})
-        parent_type = parent_info.get("type")
-        parent_id = parent_info.get("id")
+        parent_resource_name = project_resource.get("parent")
 
-        if parent_type == "organization":
-            parent_resource_name = f"organizations/{parent_id}"
-            # Get organization details
-            org_resource = crm_service.organizations().get(name=parent_resource_name).execute()
-            parent = Organization(
-                id=parent_id,
-                resource_name=parent_resource_name,
-                display_name=org_resource.get("displayName", ""),
-                _credentials=credentials,
-            )
-        elif parent_type == "folder":
-            parent_resource_name = f"folders/{parent_id}"
-            # Get folder details using CRM v2 API
-            crm_v2_service = crm_v2(credentials)
-            folder_resource = crm_v2_service.folders().get(name=parent_resource_name).execute()
+        if parent_resource_name and parent_resource_name.startswith("organizations/"):
+            org_id = parent_resource_name.split("/")[1]
+            parent = Organization.lookup(org_id, credentials=credentials)
+        elif parent_resource_name and parent_resource_name.startswith("folders/"):
+            # Use crm_v3 to get folder details
+            folder_resource = crm_service.folders().get(name=parent_resource_name).execute()
             parent = Folder(
-                id=parent_id,
-                resource_name=parent_resource_name,
+                id=folder_resource["name"].split("/")[1],
+                resource_name=folder_resource["name"],
                 display_name=folder_resource.get("displayName", ""),
                 parent_resource_name=folder_resource.get("parent", ""),
                 _credentials=credentials,
             )
         else:
             # No organization or folder parent
-            # Import here to avoid circular dependency
             from pdum.gcp.types import NO_ORG
 
             parent = NO_ORG
@@ -1082,9 +1083,9 @@ class Project:
         # Create and return the Project object
         return cls(
             id=project_resource["projectId"],
-            name=project_resource.get("name", ""),
+            name=project_resource.get("displayName", ""),
             project_number=str(project_resource.get("projectNumber", "")),
-            lifecycle_state=project_resource.get("lifecycleState", ""),
+            lifecycle_state=project_resource.get("state", ""),
             parent=parent,
             _credentials=credentials,
         )
