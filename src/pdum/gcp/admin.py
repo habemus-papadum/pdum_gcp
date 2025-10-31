@@ -60,9 +60,7 @@ def get_email(*, credentials: Optional[Credentials] = None) -> str:
     """
     # Get credentials if not provided
     if credentials is None:
-        credentials, project_id = google.auth.default(
-            scopes=["https://www.googleapis.com/auth/cloud-platform"]
-        )
+        credentials, project_id = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
 
     # Try to get email from various credential types
     email = _extract_email_from_credentials(credentials)
@@ -105,11 +103,15 @@ def get_email(*, credentials: Optional[Credentials] = None) -> str:
 def _extract_email_from_credentials(credentials: Credentials) -> Optional[str]:
     """Extract email from credentials object.
 
-    Args:
-        credentials: Google auth credentials object
+    Parameters
+    ----------
+    credentials : Credentials
+        Google-auth credentials object to inspect.
 
-    Returns:
-        Email address if found, None otherwise
+    Returns
+    -------
+    str or None
+        Email address if one can be determined, otherwise ``None``.
     """
     # Service account credentials
     if hasattr(credentials, "service_account_email"):
@@ -206,9 +208,7 @@ def list_organizations(*, credentials: Optional[Credentials] = None) -> list[Org
                 )
             )
 
-        request = crm_service.organizations().search_next(
-            previous_request=request, previous_response=response
-        )
+        request = crm_service.organizations().search_next(previous_request=request, previous_response=response)
 
     # Check if there are any projects without an organization parent
     # If so, add NO_ORG to the list
@@ -341,7 +341,7 @@ def _load_api_map() -> dict[str, str]:
     if not txt_path.exists():
         raise FileNotFoundError(
             f"API map file not found at {txt_path}. "
-            f"Generate it with: gcloud services list --available --filter=\"name:googleapis.com\" > {txt_path}"
+            f'Generate it with: gcloud services list --available --filter="name:googleapis.com" > {txt_path}'
         )
 
     api_map = {}
@@ -408,9 +408,7 @@ def lookup_api(display_name: str) -> str:
 
     # 2. Check for an exact match or normalized match first
     # We use a case-insensitive check against normalized keys
-    normalized_keys = {
-        k.lower().replace("cloud", "").strip(): v for k, v in api_map.items()
-    }
+    normalized_keys = {k.lower().replace("cloud", "").strip(): v for k, v in api_map.items()}
 
     if display_name in api_map:
         return api_map[display_name]
@@ -422,10 +420,7 @@ def lookup_api(display_name: str) -> str:
     # This catches cases like "Cloud" which appears in many API names
     # Only apply for short terms (< 10 chars) to avoid catching longer specific terms
     if len(display_name) < 10:
-        substring_matches = [
-            name for name in api_map.keys()
-            if display_name.lower() in name.lower()
-        ]
+        substring_matches = [name for name in api_map.keys() if display_name.lower() in name.lower()]
 
         if len(substring_matches) > 1:
             # Too many substring matches - term is too generic
@@ -447,9 +442,7 @@ def lookup_api(display_name: str) -> str:
 
     # difflib.get_close_matches is part of Python's standard library
     # We use a strict cutoff of 0.6 and look for up to 5 matches.
-    close_matches = difflib.get_close_matches(
-        word=display_name, possibilities=possibilities, n=5, cutoff=0.6
-    )
+    close_matches = difflib.get_close_matches(word=display_name, possibilities=possibilities, n=5, cutoff=0.6)
 
     # 5. Handle Results
     if len(close_matches) == 1:
@@ -513,9 +506,7 @@ def list_roles(
         Roles that directly bind the user on the resource.
     """
     creds = resource._get_credentials(credentials=credentials)
-    return _list_roles_internal(
-        credentials=creds, resource_name=resource.full_resource_name(), user_email=user_email
-    )
+    return _list_roles_internal(credentials=creds, resource_name=resource.full_resource_name(), user_email=user_email)
 
 
 def doctor(*, credentials: Optional[Credentials] = None, console: Optional[Console] = None) -> None:
@@ -583,9 +574,7 @@ def doctor(*, credentials: Optional[Credentials] = None, console: Optional[Conso
         c.print(
             Panel(
                 "You can enable missing APIs on the quota project (requires permissions):\n"
-                + "\n".join(
-                    f"gcloud services enable {svc} --project {qp.id}" for svc in missing
-                ),
+                + "\n".join(f"gcloud services enable {svc} --project {qp.id}" for svc in missing),
                 title="Enable Missing APIs",
                 border_style="yellow",
             )
@@ -629,7 +618,7 @@ def doctor(*, credentials: Optional[Credentials] = None, console: Optional[Conso
 
         if missing_roles:
             commands = "\n".join(
-                f"gcloud organizations add-iam-policy-binding {org.id} --member=\"user:{email}\" --role=\"{r}\""
+                f'gcloud organizations add-iam-policy-binding {org.id} --member="user:{email}" --role="{r}"'
                 for r in missing_roles
             )
             c.print(

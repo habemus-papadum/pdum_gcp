@@ -38,10 +38,14 @@ class APIResolutionError(Exception):
 class Role:
     """Information about an IAM role.
 
-    Attributes:
-        name: The role name (e.g., "roles/owner")
-        title: The human-readable role title
-        description: A description of the role
+    Attributes
+    ----------
+    name : str
+        Role resource name (e.g., ``"roles/owner"``).
+    title : str
+        Human-readable title for the role.
+    description : str
+        Short description of what the role grants.
     """
 
     name: str
@@ -53,10 +57,14 @@ class Role:
 class BillingAccount:
     """Information about a GCP billing account.
 
-    Attributes:
-        id: The billing account ID (e.g., "012345-567890-ABCDEF")
-        display_name: The human-readable display name for the billing account
-        status: Status string, e.g., "OPEN" or "CLOSED" (default: "OPEN")
+    Attributes
+    ----------
+    id : str
+        Billing account ID (for example ``"012345-567890-ABCDEF"``).
+    display_name : str
+        Human-friendly billing account name.
+    status : str
+        Status indicator such as ``"OPEN"`` or ``"CLOSED"`` (defaults to ``"OPEN"``).
     """
 
     id: str
@@ -104,11 +112,16 @@ class Container(Resource):
     This base class provides common functionality for all container types that can
     hold projects and folders.
 
-    Attributes:
-        id: The container ID (numeric string for orgs/folders, empty for NO_ORG)
-        resource_name: The full resource name (e.g., "organizations/123" or "folders/456")
-        display_name: The human-readable display name
-        _credentials: Optional Google Cloud credentials to use for API calls
+    Attributes
+    ----------
+    id : str
+        Container identifier (numeric for organizations/folders, empty for ``NO_ORG``).
+    resource_name : str
+        Fully-qualified resource name (e.g., ``"organizations/123"`` or ``"folders/456"``).
+    display_name : str
+        Human-readable label for the container.
+    _credentials : Credentials, optional
+        Cached credentials used for API calls when provided.
     """
 
     id: str
@@ -122,73 +135,103 @@ class Container(Resource):
     def parent(self, *, credentials=None) -> Optional[Container]:
         """Get the parent container.
 
-        Args:
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Explicit credentials to use. When omitted, stored credentials or ADC are used.
 
-        Returns:
-            The parent Container (Organization or Folder), or None if no parent
+        Returns
+        -------
+        Container or None
+            The parent container (organization or folder), or ``None`` if no parent exists.
 
-        Raises:
-            NotImplementedError: Subclasses must implement this method
+        Raises
+        ------
+        NotImplementedError
+            Always raised on the base class; subclasses must implement this method.
         """
         raise NotImplementedError("Subclasses must implement parent()")
 
     def folders(self, *, credentials=None) -> list[Folder]:
         """List folders that are direct children of this container.
 
-        Args:
-            credentials: Google Cloud credentials to use. If None, uses Application Default Credentials.
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Explicit credentials to use. When omitted, stored credentials or ADC are used.
 
-        Returns:
-            List of Folder objects that are direct children
+        Returns
+        -------
+        list[Folder]
+            Direct child folders of this container.
 
-        Raises:
-            NotImplementedError: Subclasses must implement this method
+        Raises
+        ------
+        NotImplementedError
+            Always raised on the base class; subclasses must implement this method.
         """
         raise NotImplementedError("Subclasses must implement folders()")
 
     def projects(self, *, credentials=None) -> list[Project]:
         """List projects that are direct children of this container.
 
-        Args:
-            credentials: Google Cloud credentials to use. If None, uses Application Default Credentials.
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Explicit credentials to use. When omitted, stored credentials or ADC are used.
 
-        Returns:
-            List of Project objects that are direct children
+        Returns
+        -------
+        list[Project]
+            Direct child projects of this container.
 
-        Raises:
-            NotImplementedError: Subclasses must implement this method
+        Raises
+        ------
+        NotImplementedError
+            Always raised on the base class; subclasses must implement this method.
         """
         raise NotImplementedError("Subclasses must implement projects()")
 
     def create_folder(self, display_name: str, *, credentials=None) -> Folder:
         """Create a new folder as a child of this container.
 
-        Args:
-            display_name: The human-readable name for the folder
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+        Parameters
+        ----------
+        display_name : str
+            Human-readable name for the folder.
+        credentials : Credentials, optional
+            Explicit credentials to use. When omitted, stored credentials or ADC are used.
 
-        Returns:
-            A Folder object representing the newly created folder
+        Returns
+        -------
+        Folder
+            The newly created folder.
 
-        Raises:
-            NotImplementedError: Subclasses must implement this method
+        Raises
+        ------
+        NotImplementedError
+            Always raised on the base class; subclasses must implement this method.
         """
         raise NotImplementedError("Subclasses must implement create_folder()")
 
     def list_roles(self, *, credentials=None, user_email: str | None = None) -> list[Role]:
         """List IAM roles for a user on this container.
 
-        Args:
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
-            user_email: If provided, list roles for this email; otherwise the
-                email associated with ADC/credentials is used.
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Explicit credentials to use. When omitted, stored credentials or ADC are used.
+        user_email : str, optional
+            Identity to query. If omitted, the email associated with the credentials is used.
 
-        Returns:
-            A list of Role objects.
+        Returns
+        -------
+        list[Role]
+            Roles that directly bind the user on this container.
         """
         creds = self._get_credentials(credentials=credentials)
         from pdum.gcp._helpers import _list_roles
+
         return _list_roles(credentials=creds, resource_name=self.resource_name, user_email=user_email)
 
     def create_project(
@@ -285,16 +328,12 @@ class Container(Resource):
                 break
             except Exception:
                 if time.time() - get_start > timeout:
-                    raise TimeoutError(
-                        f"Project get timed out after {timeout}s for 'projects/{project_id}'"
-                    )
+                    raise TimeoutError(f"Project get timed out after {timeout}s for 'projects/{project_id}'")
                 time.sleep(polling_interval)
 
         # Attach billing using the Project API if a real account provided
         if billing_account:
-            Project.update_billing_account_for_id(
-                project_id, billing_account, credentials=creds
-            )
+            Project.update_billing_account_for_id(project_id, billing_account, credentials=creds)
 
         # Finally, return a fully materialized Project (poll until searchable)
         search_start = time.time()
@@ -313,23 +352,25 @@ class Container(Resource):
                         _credentials=creds,
                     )
                 time.sleep(polling_interval)
-    def walk_projects(
-        self, *, credentials=None, active_only: bool = True
-    ) -> Generator[Project, None, None]:
+
+    def walk_projects(self, *, credentials=None, active_only: bool = True) -> Generator[Project, None, None]:
         """Recursively yield all projects within this container and its subfolders.
 
         This method performs a depth-first search through the container hierarchy,
         yielding all projects found. It first yields immediate projects of this
         container, then recursively yields projects from all child folders.
 
-        Args:
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
-            active_only: If True (default), only yield projects in ACTIVE state.
-                If False, yield all projects regardless of lifecycle state
-                (including DELETE_REQUESTED and DELETE_IN_PROGRESS).
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Explicit credentials to use. When omitted, stored credentials or ADC are used.
+        active_only : bool, default True
+            If ``True``, yield only ``ACTIVE`` projects. If ``False``, yield all lifecycle states.
 
-        Yields:
-            Project objects found in this container and all nested folders
+        Yields
+        ------
+        Project
+            Projects discovered in this container and all nested folders.
 
         Example:
             >>> from pdum.gcp import list_organizations
@@ -401,9 +442,12 @@ class Container(Resource):
     def _tree_children(self, *, credentials=None, _prefix: str = "") -> None:
         """Internal helper to print children without printing the parent again.
 
-        Args:
-            credentials: Google Cloud credentials to use
-            _prefix: The prefix for indentation
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Explicit credentials to use. When omitted, stored credentials or ADC are used.
+        _prefix : str, optional
+            Prefix used to align subsequent child lines.
         """
         creds = self._get_credentials(credentials=credentials)
 
@@ -520,10 +564,14 @@ class Organization(Container):
     )
     """Information about a GCP organization.
 
-    Attributes:
-        id: The organization ID (numeric string)
-        resource_name: The resource name (e.g., "organizations/123456789")
-        display_name: The human-readable display name
+    Attributes
+    ----------
+    id : str
+        Organization identifier (numeric string).
+    resource_name : str
+        Fully-qualified resource name (e.g., ``"organizations/123456789"``).
+    display_name : str
+        Human-readable display name for the organization.
     """
 
     def parent(self, *, credentials=None) -> Optional[Container]:
@@ -531,11 +579,15 @@ class Organization(Container):
 
         Organizations are root-level resources and have no parent.
 
-        Args:
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
 
-        Returns:
-            None (organizations have no parent)
+        Returns
+        -------
+        None
+            Organizations have no parent container.
         """
         return None
 
@@ -572,9 +624,7 @@ class Organization(Container):
                     )
                 )
 
-            request = crm_service.folders().list_next(
-                previous_request=request, previous_response=response
-            )
+            request = crm_service.folders().list_next(previous_request=request, previous_response=response)
 
         return folders
 
@@ -602,13 +652,9 @@ class Organization(Container):
         while request is not None:
             response = request.execute()
             for project in response.get("projects", []):
-                projects.append(
-                    _project_from_api_response(project, parent=self, credentials=creds)
-                )
+                projects.append(_project_from_api_response(project, parent=self, credentials=creds))
 
-            request = crm_service.projects().list_next(
-                previous_request=request, previous_response=response
-            )
+            request = crm_service.projects().list_next(previous_request=request, previous_response=response)
 
         return projects
 
@@ -643,9 +689,7 @@ class Organization(Container):
         }
 
         # Call the folders.create() method
-        operation = crm_service.folders().create(
-            body=folder_body
-        ).execute()
+        operation = crm_service.folders().create(body=folder_body).execute()
 
         # Wait for the operation to complete (folders.create returns a long-running operation)
         # The operation name is in the format "operations/..."
@@ -667,8 +711,6 @@ class Organization(Container):
             parent_resource_name=self.resource_name,
             _credentials=creds,
         )
-
-
 
     def add_user_roles(self, user_email: str, roles_to_add: list[str], *, credentials=None) -> dict:
         """Add a user to one or more IAM roles at the Organization level.
@@ -743,9 +785,7 @@ class Organization(Container):
         if not changes_made:
             return policy
 
-        updated = (
-            crm.organizations().setIamPolicy(resource=resource, body={"policy": policy}).execute()
-        )
+        updated = crm.organizations().setIamPolicy(resource=resource, body={"policy": policy}).execute()
         return updated
 
     def add_user_as_owner(self, user_email: str, *, credentials=None) -> dict:
@@ -831,14 +871,10 @@ class Organization(Container):
                 if open_only and not is_open:
                     continue
 
-                billing_accounts.append(
-                    BillingAccount(id=billing_account_id, display_name=display_name, status=status)
-                )
+                billing_accounts.append(BillingAccount(id=billing_account_id, display_name=display_name, status=status))
 
             # Get next page
-            request = billing_service.billingAccounts().list_next(
-                previous_request=request, previous_response=response
-            )
+            request = billing_service.billingAccounts().list_next(previous_request=request, previous_response=response)
 
         return billing_accounts
 
@@ -887,12 +923,18 @@ class Organization(Container):
 class Folder(Container):
     """Information about a GCP folder.
 
-    Attributes:
-        id: The folder ID (numeric string)
-        resource_name: The resource name (e.g., "folders/123456789")
-        display_name: The human-readable display name
-        parent_resource_name: The parent resource name (e.g., "organizations/123" or "folders/456")
-        _credentials: Optional Google Cloud credentials to use for API calls
+    Attributes
+    ----------
+    id : str
+        Folder identifier (numeric string).
+    resource_name : str
+        Fully-qualified resource name (e.g., ``"folders/123456789"``).
+    display_name : str
+        Human-readable display name.
+    parent_resource_name : str
+        Parent resource name (e.g., ``"organizations/123"`` or ``"folders/456"``).
+    _credentials : Credentials, optional
+        Cached credentials used for API calls when provided.
     """
 
     parent_resource_name: str = ""
@@ -900,11 +942,15 @@ class Folder(Container):
     def parent(self, *, credentials=None) -> Optional[Container]:
         """Get the parent container.
 
-        Args:
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
 
-        Returns:
-            The parent Container (Organization or Folder), or None if parent cannot be determined
+        Returns
+        -------
+        Container or None
+            The parent container (organization or folder), or ``None`` if no parent can be resolved.
         """
         if not self.parent_resource_name:
             return None
@@ -961,9 +1007,7 @@ class Folder(Container):
                     )
                 )
 
-            request = crm_service.folders().list_next(
-                previous_request=request, previous_response=response
-            )
+            request = crm_service.folders().list_next(previous_request=request, previous_response=response)
 
         return folders
 
@@ -991,13 +1035,9 @@ class Folder(Container):
         while request is not None:
             response = request.execute()
             for project in response.get("projects", []):
-                projects.append(
-                    _project_from_api_response(project, parent=self, credentials=creds)
-                )
+                projects.append(_project_from_api_response(project, parent=self, credentials=creds))
 
-            request = crm_service.projects().list_next(
-                previous_request=request, previous_response=response
-            )
+            request = crm_service.projects().list_next(previous_request=request, previous_response=response)
 
         return projects
 
@@ -1032,9 +1072,7 @@ class Folder(Container):
         }
 
         # Call the folders.create() method
-        operation = crm_service.folders().create(
-            body=folder_body
-        ).execute()
+        operation = crm_service.folders().create(body=folder_body).execute()
 
         # Wait for the operation to complete (folders.create returns a long-running operation)
         # The operation name is in the format "operations/..."
@@ -1062,13 +1100,20 @@ class Folder(Container):
 class Project(Resource):
     """Information about a GCP project.
 
-    Attributes:
-        id: The project ID (e.g., "my-project-123")
-        name: The human-readable project name
-        project_number: The project number (numeric string)
-        lifecycle_state: The lifecycle state (e.g., "ACTIVE", "DELETE_REQUESTED")
-        parent: The parent Container (Organization, Folder, or NO_ORG)
-        _credentials: Optional Google Cloud credentials to use for API calls
+    Attributes
+    ----------
+    id : str
+        Project ID (e.g., ``"my-project-123"``).
+    name : str
+        Human-readable project name.
+    project_number : str
+        Numeric project number.
+    lifecycle_state : str
+        Project lifecycle state (e.g., ``"ACTIVE"``).
+    parent : Container
+        Parent container (organization, folder, or ``NO_ORG``).
+    _credentials : Credentials, optional
+        Cached credentials used for API calls when provided.
     """
 
     id: str
@@ -1128,9 +1173,7 @@ class Project(Resource):
                     enabled_apis.append(api_name)
 
             # Get next page
-            request = service_usage_client.services().list_next(
-                previous_request=request, previous_response=response
-            )
+            request = service_usage_client.services().list_next(previous_request=request, previous_response=response)
 
         return enabled_apis
 
@@ -1186,11 +1229,7 @@ class Project(Resource):
         request_body = {"serviceIds": api_list}
 
         # Call batchEnable to initiate the operation
-        operation = (
-            service_usage_client.services()
-            .batchEnable(parent=parent_name, body=request_body)
-            .execute()
-        )
+        operation = service_usage_client.services().batchEnable(parent=parent_name, body=request_body).execute()
 
         operation_name = operation.get("name")
         if verbose:
@@ -1209,10 +1248,7 @@ class Project(Resource):
             if elapsed > timeout:
                 if verbose:
                     print()  # New line after dots
-                raise TimeoutError(
-                    f"Operation timed out after {timeout} seconds. "
-                    f"Operation name: {operation_name}"
-                )
+                raise TimeoutError(f"Operation timed out after {timeout} seconds. Operation name: {operation_name}")
 
             # Get operation status
             operation = service_usage_client.operations().get(name=operation_name).execute()
@@ -1227,9 +1263,7 @@ class Project(Resource):
                     error = operation["error"]
                     error_message = error.get("message", "Unknown error")
                     error_code = error.get("code", "Unknown")
-                    raise RuntimeError(
-                        f"Operation failed with error code {error_code}: {error_message}"
-                    )
+                    raise RuntimeError(f"Operation failed with error code {error_code}: {error_message}")
 
                 # Operation completed successfully
                 return operation
@@ -1289,9 +1323,7 @@ class Project(Resource):
         billing_account_id = billing_account_name.split("/")[1]
 
         # Get the billing account details to retrieve the display name
-        billing_account_info = (
-            billing_service.billingAccounts().get(name=billing_account_name).execute()
-        )
+        billing_account_info = billing_service.billingAccounts().get(name=billing_account_name).execute()
 
         display_name = billing_account_info.get("displayName", billing_account_id)
         is_open = billing_account_info.get("open", False)
@@ -1536,8 +1568,7 @@ class Project(Resource):
         # Validate final name length (GCP requires 6-30 characters)
         if len(name) < 6 or len(name) > 30:
             raise ValueError(
-                f"Generated name '{name}' is {len(name)} characters, "
-                f"but GCP project IDs must be 6-30 characters long"
+                f"Generated name '{name}' is {len(name)} characters, but GCP project IDs must be 6-30 characters long"
             )
 
         return name
@@ -1545,16 +1576,21 @@ class Project(Resource):
     def list_roles(self, *, credentials=None, user_email: str | None = None) -> list[Role]:
         """List IAM roles for a user on this project.
 
-        Args:
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
-            user_email: If provided, list roles for this email; otherwise the
-                email associated with ADC/credentials is used.
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Explicit credentials to use. When omitted, stored credentials or ADC are used.
+        user_email : str, optional
+            Identity to query. If omitted, the email associated with the credentials is used.
 
-        Returns:
-            A list of Role objects.
+        Returns
+        -------
+        list[Role]
+            Roles that directly bind the user on this project.
         """
         creds = self._get_credentials(credentials=credentials)
         from pdum.gcp._helpers import _list_roles
+
         return _list_roles(credentials=creds, resource_name=f"projects/{self.id}", user_email=user_email)
 
     def add_user_as_owner(self, user_email: str, *, credentials=None) -> dict:
@@ -1601,9 +1637,7 @@ class Project(Resource):
 
         # Request policy with version 3 to support conditions if present
         policy = (
-            crm.projects()
-            .getIamPolicy(resource=resource, body={"options": {"requestedPolicyVersion": 3}})
-            .execute()
+            crm.projects().getIamPolicy(resource=resource, body={"options": {"requestedPolicyVersion": 3}}).execute()
         )
 
         # Ensure version >= 3
@@ -1624,23 +1658,28 @@ class Project(Resource):
             members.append(member)
 
         # Set the modified policy
-        updated = (
-            crm.projects().setIamPolicy(resource=resource, body={"policy": policy}).execute()
-        )
+        updated = crm.projects().setIamPolicy(resource=resource, body={"policy": policy}).execute()
         return updated
+
 
 def _project_from_api_response(
     project_dict: dict, parent: Container, credentials: Optional[Credentials] = None
 ) -> Project:
     """Create a Project from API response data.
 
-    Args:
-        project_dict: Project data from the API
-        parent: The parent Container
-        credentials: Optional credentials to store in the project
+    Parameters
+    ----------
+    project_dict : dict
+        Raw project payload returned by the API.
+    parent : Container
+        Parent container to associate with the project.
+    credentials : Credentials, optional
+        Credentials to stash on the project object.
 
-    Returns:
-        Project instance
+    Returns
+    -------
+    Project
+        Materialized project instance.
     """
     return Project(
         id=project_dict["projectId"],
@@ -1698,11 +1737,15 @@ class _NoOrgSentinel(Container):
 
         NO_ORG has no parent.
 
-        Args:
-            credentials: Google Cloud credentials to use (ignored)
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Ignored; included for API parity.
 
-        Returns:
-            None
+        Returns
+        -------
+        None
+            Always ``None`` because ``NO_ORG`` has no parent.
         """
         return None
 
@@ -1711,11 +1754,15 @@ class _NoOrgSentinel(Container):
 
         NO_ORG cannot have folders as children.
 
-        Args:
-            credentials: Google Cloud credentials to use (ignored)
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Ignored; included for API parity.
 
-        Returns:
-            Empty list (NO_ORG has no folders)
+        Returns
+        -------
+        list[Folder]
+            Always an empty list.
         """
         return []
 
@@ -1724,12 +1771,17 @@ class _NoOrgSentinel(Container):
 
         NO_ORG cannot have folders as children.
 
-        Args:
-            display_name: The human-readable name for the folder (ignored)
-            credentials: Google Cloud credentials to use (ignored)
+        Parameters
+        ----------
+        display_name : str
+            Ignored parameter for compatibility.
+        credentials : Credentials, optional
+            Ignored parameter for compatibility.
 
-        Raises:
-            TypeError: Always raised because NO_ORG cannot have folders
+        Raises
+        ------
+        TypeError
+            Always raised because ``NO_ORG`` cannot contain folders.
         """
         raise TypeError(
             "NO_ORG cannot have folders. Projects without an organization parent "
@@ -1742,12 +1794,17 @@ class _NoOrgSentinel(Container):
 
         NO_ORG cannot have folders, so cd is not supported.
 
-        Args:
-            path: The folder path (ignored)
-            credentials: Google Cloud credentials to use (ignored)
+        Parameters
+        ----------
+        path : str
+            Ignored parameter for compatibility.
+        credentials : Credentials, optional
+            Ignored parameter for compatibility.
 
-        Raises:
-            TypeError: Always raised because NO_ORG cannot have folders
+        Raises
+        ------
+        TypeError
+            Always raised because ``NO_ORG`` cannot have folders.
         """
         raise TypeError(
             "NO_ORG cannot have folders. Projects without an organization parent "
@@ -1760,15 +1817,22 @@ class _NoOrgSentinel(Container):
         This method lists projects that are not under an organization or folder,
         typically projects in personal GCP accounts.
 
-        Args:
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
 
-        Returns:
-            List of Project objects representing projects without organization parents
+        Returns
+        -------
+        list[Project]
+            Projects that have no organization or folder parent.
 
-        Raises:
-            google.auth.exceptions.DefaultCredentialsError: If no credentials can be found
-            googleapiclient.errors.HttpError: If the API call fails
+        Raises
+        ------
+        google.auth.exceptions.DefaultCredentialsError
+            If no credentials can be found.
+        googleapiclient.errors.HttpError
+            If the API call fails.
 
         Example:
             >>> from pdum.gcp import NO_ORG
@@ -1796,9 +1860,7 @@ class _NoOrgSentinel(Container):
                 if not parent_type or parent_type not in ("organization", "folder"):
                     projects.append(_project_from_api_response(project, parent=self, credentials=creds))
 
-            request = crm_service.projects().list_next(
-                previous_request=request, previous_response=response
-            )
+            request = crm_service.projects().list_next(previous_request=request, previous_response=response)
 
         return projects
 
@@ -1808,8 +1870,10 @@ class _NoOrgSentinel(Container):
 
         This method is kept for backward compatibility.
 
-        Args:
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
         """
         return self.projects(credentials=credentials)
 
@@ -1823,15 +1887,22 @@ class _NoOrgSentinel(Container):
 
         The user must have the "Billing Account Viewer" role to see billing accounts.
 
-        Args:
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
-            open_only: If True (default), include only open accounts.
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
+        open_only : bool, default True
+            Whether to include only open accounts.
 
-        Returns:
-            List of all BillingAccount objects visible to the user
+        Returns
+        -------
+        list[BillingAccount]
+            Billing accounts visible to the caller.
 
-        Raises:
-            googleapiclient.errors.HttpError: If the API call fails
+        Raises
+        ------
+        googleapiclient.errors.HttpError
+            If the API call fails.
 
         Example:
             >>> from pdum.gcp import NO_ORG
@@ -1869,9 +1940,7 @@ class _NoOrgSentinel(Container):
                     )
 
             # Get next page
-            request = billing_service.billingAccounts().list_next(
-                previous_request=request, previous_response=response
-            )
+            request = billing_service.billingAccounts().list_next(previous_request=request, previous_response=response)
 
         return billing_accounts
 
