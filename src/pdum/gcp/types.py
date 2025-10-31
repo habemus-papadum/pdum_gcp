@@ -91,6 +91,21 @@ class Container:
         """
         raise NotImplementedError("Subclasses must implement projects()")
 
+    def create_folder(self, display_name: str, credentials=None) -> Folder:
+        """Create a new folder as a child of this container.
+
+        Args:
+            display_name: The human-readable name for the folder
+            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+
+        Returns:
+            A Folder object representing the newly created folder
+
+        Raises:
+            NotImplementedError: Subclasses must implement this method
+        """
+        raise NotImplementedError("Subclasses must implement create_folder()")
+
     def tree(self, credentials=None, _prefix: str = "", _is_last: bool = True) -> None:
         """Print a tree view of this container and all its children.
 
@@ -289,6 +304,59 @@ class Organization(Container):
 
         return projects
 
+    def create_folder(self, display_name: str, credentials=None) -> Folder:
+        """Create a new folder as a child of this organization.
+
+        Args:
+            display_name: The human-readable name for the folder
+            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+
+        Returns:
+            A Folder object representing the newly created folder
+
+        Raises:
+            googleapiclient.errors.HttpError: If the API call fails
+        """
+        creds = self._get_credentials(credentials)
+
+        crm_service = discovery.build(
+            "cloudresourcemanager", "v2", credentials=creds, cache_discovery=False
+        )
+
+        # Create folder request body
+        # Note: parent is passed as a parameter, not in the body
+        folder_body = {
+            "displayName": display_name,
+        }
+
+        # Call the folders.create() method
+        # parent parameter is required and separate from the body
+        operation = crm_service.folders().create(
+            body=folder_body,
+            parent=self.resource_name
+        ).execute()
+
+        # Wait for the operation to complete (folders.create returns a long-running operation)
+        # The operation name is in the format "operations/..."
+        while not operation.get("done", False):
+            import time
+
+            time.sleep(1)
+            operation = crm_service.operations().get(name=operation["name"]).execute()
+
+        # Extract the folder from the operation response
+        folder_resource_name = operation["response"]["name"]
+        folder_id = folder_resource_name.split("/")[1]
+
+        # Return a Folder object
+        return Folder(
+            id=folder_id,
+            resource_name=folder_resource_name,
+            display_name=display_name,
+            parent_resource_name=self.resource_name,
+            _credentials=creds,
+        )
+
 
 @dataclass
 class Folder(Container):
@@ -417,6 +485,59 @@ class Folder(Container):
             )
 
         return projects
+
+    def create_folder(self, display_name: str, credentials=None) -> Folder:
+        """Create a new folder as a child of this folder.
+
+        Args:
+            display_name: The human-readable name for the folder
+            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+
+        Returns:
+            A Folder object representing the newly created folder
+
+        Raises:
+            googleapiclient.errors.HttpError: If the API call fails
+        """
+        creds = self._get_credentials(credentials)
+
+        crm_service = discovery.build(
+            "cloudresourcemanager", "v2", credentials=creds, cache_discovery=False
+        )
+
+        # Create folder request body
+        # Note: parent is passed as a parameter, not in the body
+        folder_body = {
+            "displayName": display_name,
+        }
+
+        # Call the folders.create() method
+        # parent parameter is required and separate from the body
+        operation = crm_service.folders().create(
+            body=folder_body,
+            parent=self.resource_name
+        ).execute()
+
+        # Wait for the operation to complete (folders.create returns a long-running operation)
+        # The operation name is in the format "operations/..."
+        while not operation.get("done", False):
+            import time
+
+            time.sleep(1)
+            operation = crm_service.operations().get(name=operation["name"]).execute()
+
+        # Extract the folder from the operation response
+        folder_resource_name = operation["response"]["name"]
+        folder_id = folder_resource_name.split("/")[1]
+
+        # Return a Folder object
+        return Folder(
+            id=folder_id,
+            resource_name=folder_resource_name,
+            display_name=display_name,
+            parent_resource_name=self.resource_name,
+            _credentials=creds,
+        )
 
 
 @dataclass
@@ -606,6 +727,24 @@ class _NoOrgSentinel(Container):
             Empty list (NO_ORG has no folders)
         """
         return []
+
+    def create_folder(self, display_name: str, credentials=None) -> Folder:
+        """Create a new folder as a child of NO_ORG.
+
+        NO_ORG cannot have folders as children.
+
+        Args:
+            display_name: The human-readable name for the folder (ignored)
+            credentials: Google Cloud credentials to use (ignored)
+
+        Raises:
+            TypeError: Always raised because NO_ORG cannot have folders
+        """
+        raise TypeError(
+            "NO_ORG cannot have folders. Projects without an organization parent "
+            "cannot contain folders. To create a folder, you must first create or "
+            "use an existing organization or folder as the parent."
+        )
 
     def projects(self, credentials=None) -> list[Project]:
         """List projects that have no organization or folder parent.

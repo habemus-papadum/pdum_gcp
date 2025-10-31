@@ -527,6 +527,42 @@ def test_container_has_tree_method():
     assert callable(NO_ORG.tree)
 
 
+def test_container_has_create_folder_method():
+    """Test that Container has a create_folder() method."""
+    assert hasattr(Container, "create_folder")
+    assert callable(Container.create_folder)
+
+    # Verify Organization has the method
+    assert hasattr(Organization, "create_folder")
+    assert callable(Organization.create_folder)
+
+    # Verify Folder has the method
+    assert hasattr(Folder, "create_folder")
+    assert callable(Folder.create_folder)
+
+    # Verify NO_ORG has the method (but it raises exception)
+    assert hasattr(NO_ORG, "create_folder")
+    assert callable(NO_ORG.create_folder)
+
+
+def test_no_org_create_folder_raises_exception():
+    """Test that NO_ORG.create_folder() raises TypeError.
+
+    NO_ORG cannot have folders as children, so attempting to create
+    a folder should raise a TypeError.
+    """
+    import pytest
+
+    with pytest.raises(TypeError, match="NO_ORG cannot have folders"):
+        NO_ORG.create_folder("test-folder")
+
+    with pytest.raises(
+        TypeError,
+        match="Projects without an organization parent cannot contain folders",
+    ):
+        NO_ORG.create_folder("another-test")
+
+
 @manual_test
 def test_tree_method():
     """Test that the tree() method prints a nice tree structure.
