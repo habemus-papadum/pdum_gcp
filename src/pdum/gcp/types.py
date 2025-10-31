@@ -53,7 +53,7 @@ class Container:
     display_name: str
     _credentials: Optional[Credentials] = field(default=None, repr=False, compare=False)
 
-    def _get_credentials(self, credentials: Optional[Credentials] = None) -> Credentials:
+    def _get_credentials(self, *, credentials: Optional[Credentials] = None) -> Credentials:
         """Get credentials for API calls.
 
         Args:
@@ -69,8 +69,11 @@ class Container:
         creds, _ = google.auth.default()
         return creds
 
-    def parent(self, credentials=None) -> Optional[Container]:
+    def parent(self, *, credentials=None) -> Optional[Container]:
         """Get the parent container.
+
+        Args:
+            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
 
         Returns:
             The parent Container (Organization or Folder), or None if no parent
@@ -80,7 +83,7 @@ class Container:
         """
         raise NotImplementedError("Subclasses must implement parent()")
 
-    def folders(self, credentials=None) -> list[Folder]:
+    def folders(self, *, credentials=None) -> list[Folder]:
         """List folders that are direct children of this container.
 
         Args:
@@ -94,7 +97,7 @@ class Container:
         """
         raise NotImplementedError("Subclasses must implement folders()")
 
-    def projects(self, credentials=None) -> list[Project]:
+    def projects(self, *, credentials=None) -> list[Project]:
         """List projects that are direct children of this container.
 
         Args:
@@ -108,7 +111,7 @@ class Container:
         """
         raise NotImplementedError("Subclasses must implement projects()")
 
-    def create_folder(self, display_name: str, credentials=None) -> Folder:
+    def create_folder(self, display_name: str, *, credentials=None) -> Folder:
         """Create a new folder as a child of this container.
 
         Args:
@@ -123,7 +126,7 @@ class Container:
         """
         raise NotImplementedError("Subclasses must implement create_folder()")
 
-    def tree(self, credentials=None, _prefix: str = "", _is_last: bool = True) -> None:
+    def tree(self, *, credentials=None, _prefix: str = "", _is_last: bool = True) -> None:
         """Print a tree view of this container and all its children.
 
         This method recursively prints a visual tree structure showing:
@@ -155,7 +158,7 @@ class Container:
             │   └── 🎵 prod-project-1 (ACTIVE)
             └── 🎵 shared-project (ACTIVE)
         """
-        creds = self._get_credentials(credentials)
+        creds = self._get_credentials(credentials=credentials)
 
         # Determine the emoji based on the container type (whimsical and colorful!)
         if self is NO_ORG:
@@ -194,14 +197,14 @@ class Container:
                 # Recursively print the folder's children
                 child._tree_children(credentials=creds, _prefix=new_prefix)
 
-    def _tree_children(self, credentials=None, _prefix: str = "") -> None:
+    def _tree_children(self, *, credentials=None, _prefix: str = "") -> None:
         """Internal helper to print children without printing the parent again.
 
         Args:
             credentials: Google Cloud credentials to use
             _prefix: The prefix for indentation
         """
-        creds = self._get_credentials(credentials)
+        creds = self._get_credentials(credentials=credentials)
 
         # Get all folders and projects
         folders = self.folders(credentials=creds)
@@ -240,17 +243,20 @@ class Organization(Container):
         display_name: The human-readable display name
     """
 
-    def parent(self, credentials=None) -> Optional[Container]:
+    def parent(self, *, credentials=None) -> Optional[Container]:
         """Get the parent container.
 
         Organizations are root-level resources and have no parent.
+
+        Args:
+            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
 
         Returns:
             None (organizations have no parent)
         """
         return None
 
-    def folders(self, credentials=None) -> list[Folder]:
+    def folders(self, *, credentials=None) -> list[Folder]:
         """List folders that are direct children of this organization.
 
         Args:
@@ -259,7 +265,7 @@ class Organization(Container):
         Returns:
             List of Folder objects that are direct children of this organization
         """
-        creds = self._get_credentials(credentials)
+        creds = self._get_credentials(credentials=credentials)
 
         crm_service = discovery.build(
             "cloudresourcemanager", "v2", credentials=creds, cache_discovery=False
@@ -287,7 +293,7 @@ class Organization(Container):
 
         return folders
 
-    def projects(self, credentials=None) -> list[Project]:
+    def projects(self, *, credentials=None) -> list[Project]:
         """List projects that are direct children of this organization.
 
         Args:
@@ -296,7 +302,7 @@ class Organization(Container):
         Returns:
             List of Project objects that are direct children of this organization
         """
-        creds = self._get_credentials(credentials)
+        creds = self._get_credentials(credentials=credentials)
 
         crm_service = discovery.build(
             "cloudresourcemanager", "v1", credentials=creds, cache_discovery=False
@@ -321,7 +327,7 @@ class Organization(Container):
 
         return projects
 
-    def create_folder(self, display_name: str, credentials=None) -> Folder:
+    def create_folder(self, display_name: str, *, credentials=None) -> Folder:
         """Create a new folder as a child of this organization.
 
         Args:
@@ -334,7 +340,7 @@ class Organization(Container):
         Raises:
             googleapiclient.errors.HttpError: If the API call fails
         """
-        creds = self._get_credentials(credentials)
+        creds = self._get_credentials(credentials=credentials)
 
         crm_service = discovery.build(
             "cloudresourcemanager", "v2", credentials=creds, cache_discovery=False
@@ -389,19 +395,19 @@ class Folder(Container):
 
     parent_resource_name: str = ""
 
-    def parent(self, credentials=None) -> Optional[Container]:
+    def parent(self, *, credentials=None) -> Optional[Container]:
         """Get the parent container.
-
-        Returns:
-            The parent Container (Organization or Folder), or None if parent cannot be determined
 
         Args:
             credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+
+        Returns:
+            The parent Container (Organization or Folder), or None if parent cannot be determined
         """
         if not self.parent_resource_name:
             return None
 
-        creds = self._get_credentials(credentials)
+        creds = self._get_credentials(credentials=credentials)
 
         # Parse the parent resource name
         if self.parent_resource_name.startswith("organizations/"):
@@ -434,7 +440,7 @@ class Folder(Container):
 
         return None
 
-    def folders(self, credentials=None) -> list[Folder]:
+    def folders(self, *, credentials=None) -> list[Folder]:
         """List folders that are direct children of this folder.
 
         Args:
@@ -443,7 +449,7 @@ class Folder(Container):
         Returns:
             List of Folder objects that are direct children of this folder
         """
-        creds = self._get_credentials(credentials)
+        creds = self._get_credentials(credentials=credentials)
 
         crm_service = discovery.build(
             "cloudresourcemanager", "v2", credentials=creds, cache_discovery=False
@@ -471,7 +477,7 @@ class Folder(Container):
 
         return folders
 
-    def projects(self, credentials=None) -> list[Project]:
+    def projects(self, *, credentials=None) -> list[Project]:
         """List projects that are direct children of this folder.
 
         Args:
@@ -480,7 +486,7 @@ class Folder(Container):
         Returns:
             List of Project objects that are direct children of this folder
         """
-        creds = self._get_credentials(credentials)
+        creds = self._get_credentials(credentials=credentials)
 
         crm_service = discovery.build(
             "cloudresourcemanager", "v1", credentials=creds, cache_discovery=False
@@ -503,7 +509,7 @@ class Folder(Container):
 
         return projects
 
-    def create_folder(self, display_name: str, credentials=None) -> Folder:
+    def create_folder(self, display_name: str, *, credentials=None) -> Folder:
         """Create a new folder as a child of this folder.
 
         Args:
@@ -516,7 +522,7 @@ class Folder(Container):
         Raises:
             googleapiclient.errors.HttpError: If the API call fails
         """
-        creds = self._get_credentials(credentials)
+        creds = self._get_credentials(credentials=credentials)
 
         crm_service = discovery.build(
             "cloudresourcemanager", "v2", credentials=creds, cache_discovery=False
@@ -577,7 +583,7 @@ class Project:
     parent: Container
     _credentials: Optional[Credentials] = field(default=None, repr=False, compare=False)
 
-    def _get_credentials(self, credentials: Optional[Credentials] = None) -> Credentials:
+    def _get_credentials(self, *, credentials: Optional[Credentials] = None) -> Credentials:
         """Get credentials for API calls.
 
         Args:
@@ -593,7 +599,7 @@ class Project:
         creds, _ = google.auth.default()
         return creds
 
-    def billing_account(self, credentials=None) -> BillingAccount:
+    def billing_account(self, *, credentials=None) -> BillingAccount:
         """Get the billing account associated with this project.
 
         This method retrieves the billing information for the project and returns
@@ -618,7 +624,7 @@ class Project:
             ... else:
             ...     print("No billing account")
         """
-        creds = self._get_credentials(credentials)
+        creds = self._get_credentials(credentials=credentials)
 
         # Build the Cloud Billing V1 service client
         billing_service = discovery.build(
@@ -781,27 +787,33 @@ class _NoOrgSentinel(Container):
         # Always returns False so it can be used in boolean contexts
         return False
 
-    def parent(self, credentials=None) -> Optional[Container]:
+    def parent(self, *, credentials=None) -> Optional[Container]:
         """Get the parent container.
 
         NO_ORG has no parent.
+
+        Args:
+            credentials: Google Cloud credentials to use (ignored)
 
         Returns:
             None
         """
         return None
 
-    def folders(self, credentials=None) -> list[Folder]:
+    def folders(self, *, credentials=None) -> list[Folder]:
         """List folders that are direct children of NO_ORG.
 
         NO_ORG cannot have folders as children.
+
+        Args:
+            credentials: Google Cloud credentials to use (ignored)
 
         Returns:
             Empty list (NO_ORG has no folders)
         """
         return []
 
-    def create_folder(self, display_name: str, credentials=None) -> Folder:
+    def create_folder(self, display_name: str, *, credentials=None) -> Folder:
         """Create a new folder as a child of NO_ORG.
 
         NO_ORG cannot have folders as children.
@@ -819,7 +831,7 @@ class _NoOrgSentinel(Container):
             "use an existing organization or folder as the parent."
         )
 
-    def projects(self, credentials=None) -> list[Project]:
+    def projects(self, *, credentials=None) -> list[Project]:
         """List projects that have no organization or folder parent.
 
         This method lists projects that are not under an organization or folder,
@@ -842,7 +854,7 @@ class _NoOrgSentinel(Container):
             ...     print(f"Project: {project.name} ({project.id})")
             Project: My Project (my-project-123)
         """
-        creds = self._get_credentials(credentials)
+        creds = self._get_credentials(credentials=credentials)
 
         crm_service = discovery.build(
             "cloudresourcemanager", "v1", credentials=creds, cache_discovery=False
@@ -870,10 +882,13 @@ class _NoOrgSentinel(Container):
         return projects
 
     # Keep the old method name for backward compatibility
-    def list_projects(self, credentials=None) -> list[Project]:
+    def list_projects(self, *, credentials=None) -> list[Project]:
         """Deprecated: Use projects() instead.
 
         This method is kept for backward compatibility.
+
+        Args:
+            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
         """
         return self.projects(credentials=credentials)
 

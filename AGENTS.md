@@ -274,6 +274,101 @@ uv run ruff check --fix .
 - **Type Hints**: Use type hints where appropriate
 - **Docstrings**: NumPy style, include Parameters, Returns, Raises sections
 
+### Keyword-Only Parameters
+
+**IMPORTANT: Prefer keyword-only parameters for optional arguments.**
+
+This project uses keyword-only parameters extensively to make API calls more explicit and prevent accidental parameter mismatches. This is especially important for optional parameters like `credentials`.
+
+#### When to Use Keyword-Only Parameters
+
+Use keyword-only parameters (with `*`) for:
+- Optional parameters (anything with a default value)
+- Parameters that aren't critical to understanding the function's purpose at the call site
+- Parameters that might be easily confused or misordered
+
+**Examples:**
+
+```python
+# ✅ CORRECT: Keyword-only parameters for optional args
+def get_email(*, credentials: Optional[Credentials] = None) -> str:
+    """Get email from credentials."""
+    pass
+
+def create_folder(self, display_name: str, *, credentials=None) -> Folder:
+    """Create a folder with required name and optional credentials."""
+    pass
+
+def tree(self, *, credentials=None, _prefix: str = "", _is_last: bool = True) -> None:
+    """Print tree with all optional parameters."""
+    pass
+
+# ❌ WRONG: Positional optional parameters
+def get_email(credentials: Optional[Credentials] = None) -> str:  # Bad
+    pass
+
+def create_folder(self, display_name: str, credentials=None) -> Folder:  # Bad
+    pass
+```
+
+#### Calling Convention
+
+When calling methods with keyword-only parameters, always use keyword arguments:
+
+```python
+# ✅ CORRECT: Use keyword arguments
+email = get_email(credentials=my_creds)
+projects = org.projects(credentials=my_creds)
+folder = org.create_folder("MyFolder", credentials=my_creds)
+
+# ❌ WRONG: Cannot use positional arguments (will raise TypeError)
+email = get_email(my_creds)  # TypeError!
+projects = org.projects(my_creds)  # TypeError!
+```
+
+#### Benefits
+
+1. **Explicitness**: Call sites clearly show what each argument represents
+2. **Safety**: Prevents accidental argument swapping or mismatches
+3. **Evolution**: Makes it easier to add new optional parameters without breaking existing code
+4. **Readability**: Code is self-documenting at the call site
+
+#### Pattern for Required + Optional Parameters
+
+When you have both required and optional parameters:
+
+```python
+def method(self, required_arg: str, *, optional_arg=None, another_optional=None):
+    """
+    Method with required positional arg and keyword-only optional args.
+
+    Args:
+        required_arg: This must be passed positionally
+        optional_arg: This must be passed by keyword if provided
+        another_optional: This must be passed by keyword if provided
+    """
+    pass
+
+# Correct usage:
+obj.method("required")
+obj.method("required", optional_arg="value")
+obj.method("required", optional_arg="value", another_optional="other")
+```
+
+#### Consistency
+
+**All methods accepting `credentials` parameter use keyword-only:**
+- `get_email(*, credentials=None)`
+- `list_organizations(*, credentials=None)`
+- `Container.parent(*, credentials=None)`
+- `Container.folders(*, credentials=None)`
+- `Container.projects(*, credentials=None)`
+- `Container.create_folder(display_name, *, credentials=None)`
+- `Container.tree(*, credentials=None, ...)`
+- `Project.billing_account(*, credentials=None)`
+
+When implementing new methods, follow this pattern consistently.
+
 ### Testing Strategy
 - Test files must start with `test_` prefix
 - Test classes must start with `Test` prefix

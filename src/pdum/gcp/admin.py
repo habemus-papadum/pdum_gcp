@@ -14,7 +14,7 @@ from googleapiclient import discovery
 from pdum.gcp.types import Organization
 
 
-def get_email(credentials: Optional[Credentials] = None) -> str:
+def get_email(*, credentials: Optional[Credentials] = None) -> str:
     """Get the email address associated with the given credentials or ADC.
 
     This function retrieves the credentials (using provided credentials or
@@ -127,7 +127,7 @@ def _extract_email_from_credentials(credentials: Credentials) -> Optional[str]:
     return None
 
 
-def list_organizations(credentials: Optional[Credentials] = None) -> list[Organization]:
+def list_organizations(*, credentials: Optional[Credentials] = None) -> list[Organization]:
     """List all Google Cloud organizations accessible to the given credentials or ADC.
 
     This function uses the Cloud Resource Manager V1 API to list all organizations
