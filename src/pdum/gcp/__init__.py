@@ -21,7 +21,7 @@ from pdum.gcp.types import (
     Project,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0-alpha"
 
 
 __all__ = [
