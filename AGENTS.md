@@ -8,6 +8,41 @@ This is a Python library called `gcp` (package name: `gcp`, module name: `pdum.g
 
 The project uses a modern Python toolchain with UV for dependency management.
 
+## File Creation Guidelines
+
+**DO NOT create example files.** The user does not need example scripts or demonstration files. Focus on:
+- Implementing functionality in the library code
+- Writing comprehensive tests
+- Adding clear docstrings with usage examples
+
+If asked to demonstrate functionality, provide usage examples in docstrings rather than creating separate example files.
+
+## API Map Data File
+
+The `lookup_api()` function relies on a data file at `src/pdum/gcp/data/api_map.txt` that maps API display names to service IDs.
+
+**To generate/update this file:**
+
+```bash
+gcloud services list --available --filter="name:googleapis.com" > src/pdum/gcp/data/api_map.txt
+```
+
+This file should be:
+- Generated periodically to keep API mappings up to date
+- Checked into the repository
+- Distributed with the package wheel
+
+The file format is whitespace-delimited with two columns:
+```
+NAME                          TITLE
+compute.googleapis.com        Compute Engine API
+storage.googleapis.com        Cloud Storage API
+```
+
+Where:
+- NAME (first column, no spaces) = service ID
+- TITLE (remaining columns) = display name
+
 ## ⚠️ CRITICAL: GCP Estate Mutation Rules
 
 **ABSOLUTELY NEVER RUN ANY CODE THAT MUTATES THE GCP ESTATE.**

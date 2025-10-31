@@ -19,6 +19,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "backoff>=2.2.1",
     "coolname>=2.2.0",
     "google-api-python-client>=2.186.0",
     "google-auth>=2.42.1",
@@ -48,6 +49,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pdum"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/pdum/gcp/data" = "pdum/gcp/data"
 
 
 [dependency-groups]

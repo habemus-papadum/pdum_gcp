@@ -1,9 +1,16 @@
 """Utilities and tools for Google Cloud"""
 
-from pdum.gcp.admin import get_email, list_organizations, quota_project, walk_projects
+from pdum.gcp.admin import (
+    get_email,
+    list_organizations,
+    lookup_api,
+    quota_project,
+    walk_projects,
+)
 from pdum.gcp.types import (
     NO_BILLING_ACCOUNT,
     NO_ORG,
+    APIResolutionError,
     BillingAccount,
     Container,
     Folder,
@@ -18,8 +25,10 @@ __all__ = [
     "__version__",
     "get_email",
     "list_organizations",
+    "lookup_api",
     "quota_project",
     "walk_projects",
+    "APIResolutionError",
     "BillingAccount",
     "Container",
     "Organization",

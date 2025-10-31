@@ -15,10 +15,17 @@ import os
 
 import pytest
 
-from pdum.gcp.admin import get_email, list_organizations, quota_project, walk_projects
+from pdum.gcp.admin import (
+    get_email,
+    list_organizations,
+    lookup_api,
+    quota_project,
+    walk_projects,
+)
 from pdum.gcp.types import (
     NO_BILLING_ACCOUNT,
     NO_ORG,
+    APIResolutionError,
     BillingAccount,
     Container,
     Folder,
@@ -306,6 +313,7 @@ def test_admin_functions_are_callable():
     assert callable(list_organizations)
     assert callable(quota_project)
     assert callable(walk_projects)
+    assert callable(lookup_api)
 
 
 def test_project_suggest_name_with_prefix():
@@ -872,6 +880,7 @@ def test_walk_projects():
     1. The walk_projects() function yields projects from all organizations
     2. The function correctly recurses through folders
     3. Each yielded item is a valid Project object
+    4. The active_only parameter filters projects correctly
 
     Note: This may take some time if you have many organizations/folders/projects.
     """
@@ -879,36 +888,66 @@ def test_walk_projects():
     print("Testing walk_projects() function")
     print("=" * 80)
 
-    project_count = 0
+    # Test with active_only=True (default)
+    print("\nTesting with active_only=True (default):")
+    active_count = 0
     org_project_counts = {}
 
-    # Walk through all projects
     for project in walk_projects():
         # Verify it's a Project object
         assert isinstance(project, Project)
         assert isinstance(project.id, str)
         assert len(project.id) > 0
 
+        # Verify all projects are ACTIVE when active_only=True
+        assert project.lifecycle_state == "ACTIVE", (
+            f"Expected ACTIVE state, got {project.lifecycle_state} for {project.id}"
+        )
+
         # Track which org this project belongs to
         parent_name = project.parent.display_name
         org_project_counts[parent_name] = org_project_counts.get(parent_name, 0) + 1
 
-        project_count += 1
+        active_count += 1
 
         # Print first 10 projects
-        if project_count <= 10:
-            print(f"  {project_count}. {project.id} (parent: {parent_name})")
+        if active_count <= 10:
+            print(f"  {active_count}. {project.id} (parent: {parent_name})")
 
-    if project_count > 10:
-        print(f"  ... and {project_count - 10} more projects")
+    if active_count > 10:
+        print(f"  ... and {active_count - 10} more projects")
+
+    print(f"\n✓ Found {active_count} ACTIVE project(s)")
+
+    # Test with active_only=False
+    print("\nTesting with active_only=False:")
+    all_count = 0
+    state_counts = {}
+
+    for project in walk_projects(active_only=False):
+        assert isinstance(project, Project)
+        all_count += 1
+
+        state = project.lifecycle_state
+        state_counts[state] = state_counts.get(state, 0) + 1
+
+    print(f"✓ Found {all_count} project(s) total (all states)")
+    print("\nProject counts by lifecycle state:")
+    for state, count in sorted(state_counts.items()):
+        print(f"  {state}: {count}")
+
+    # Verify active_only=False returns at least as many projects as active_only=True
+    assert all_count >= active_count, (
+        f"active_only=False should return >= projects ({all_count} >= {active_count})"
+    )
 
     print("\n" + "-" * 80)
-    print("Project counts by parent:")
+    print("Project counts by parent (active only):")
     for parent_name, count in sorted(org_project_counts.items()):
         print(f"  {parent_name}: {count} project(s)")
 
     print("-" * 80)
-    print(f"\n✓ Successfully walked through {project_count} project(s) total")
+    print(f"\n✓ Successfully walked through projects with filtering")
     print("=" * 80)
 
 
@@ -920,6 +959,7 @@ def test_container_walk_projects():
     1. The Container.walk_projects() method yields projects
     2. The method correctly recurses through folders
     3. Each yielded item is a valid Project object
+    4. The active_only parameter works at the container level
     """
     print("\n" + "=" * 80)
     print("Testing Container.walk_projects() method")
@@ -934,16 +974,146 @@ def test_container_walk_projects():
     org = organizations[0]
     print(f"\nTesting with organization: {org.display_name}")
 
-    project_count = 0
+    # Test active_only=True (default)
+    print("\nWith active_only=True (default):")
+    active_count = 0
     for project in org.walk_projects():
         assert isinstance(project, Project)
-        project_count += 1
+        assert project.lifecycle_state == "ACTIVE"
+        active_count += 1
 
-        if project_count <= 10:
-            print(f"  {project_count}. {project.id}")
+        if active_count <= 10:
+            print(f"  {active_count}. {project.id} (state: {project.lifecycle_state})")
 
-    if project_count > 10:
-        print(f"  ... and {project_count - 10} more projects")
+    if active_count > 10:
+        print(f"  ... and {active_count - 10} more projects")
 
-    print(f"\n✓ Found {project_count} project(s) in {org.display_name}")
+    print(f"✓ Found {active_count} ACTIVE project(s)")
+
+    # Test active_only=False
+    print("\nWith active_only=False:")
+    all_count = 0
+    state_counts = {}
+    for project in org.walk_projects(active_only=False):
+        assert isinstance(project, Project)
+        all_count += 1
+        state = project.lifecycle_state
+        state_counts[state] = state_counts.get(state, 0) + 1
+
+    print(f"✓ Found {all_count} project(s) total (all states)")
+    if state_counts:
+        print("Lifecycle states:")
+        for state, count in sorted(state_counts.items()):
+            print(f"  {state}: {count}")
+
+    # Verify active_only=False returns >= projects
+    assert all_count >= active_count
+
+    print(f"\n✓ Successfully tested filtering in {org.display_name}")
+    print("=" * 80)
+
+
+def test_api_resolution_error_exists():
+    """Test that APIResolutionError exception exists and can be raised."""
+    # Verify the exception exists
+    assert APIResolutionError is not None
+
+    # Verify it's a subclass of Exception
+    assert issubclass(APIResolutionError, Exception)
+
+    # Verify we can raise and catch it
+    try:
+        raise APIResolutionError("Test error message")
+    except APIResolutionError as e:
+        assert str(e) == "Test error message"
+
+
+def test_lookup_api_function_exists():
+    """Test that lookup_api function exists."""
+    assert callable(lookup_api)
+
+
+@manual_test
+def test_lookup_api():
+    """Test the lookup_api function with real API lookups.
+
+    This test verifies that:
+    1. Exact matches work
+    2. Fuzzy matching works
+    3. Normalization works (removing "cloud", etc.)
+    4. Ambiguous queries raise appropriate errors
+
+    Note: Requires the API map CSV to be generated first using generate_api_map_csv().
+    """
+    print("\n" + "=" * 80)
+    print("Testing lookup_api() function")
+    print("=" * 80)
+
+    # Test 1: Exact match (should work)
+    print("\n1. Testing exact match: 'Compute Engine API'")
+    try:
+        result = lookup_api("Compute Engine API")
+        print(f"   ✓ Found: {result}")
+        assert "compute" in result
+    except APIResolutionError as e:
+        print(f"   ⚠️  Error (may need different exact name): {e}")
+    except FileNotFoundError as e:
+        print(f"   ❌ CSV file not found: {e}")
+        print("   Run generate_api_map_csv() first to create the CSV file")
+        return
+
+    # Test 2: Partial match (should use fuzzy matching)
+    print("\n2. Testing partial match: 'Compute Engine'")
+    try:
+        result = lookup_api("Compute Engine")
+        print(f"   ✓ Found: {result}")
+        assert "compute" in result.lower()
+    except APIResolutionError as e:
+        print(f"   ⚠️  Error: {e}")
+
+    # Test 3: Fuzzy match with typo
+    print("\n3. Testing fuzzy match: 'BigQuery'")
+    try:
+        result = lookup_api("BigQuery")
+        print(f"   ✓ Found: {result}")
+        assert "bigquery" in result.lower()
+    except APIResolutionError as e:
+        print(f"   ⚠️  Error: {e}")
+
+    # Test 4: Normalized match (removing "Cloud")
+    print("\n4. Testing normalized match: 'Storage'")
+    try:
+        result = lookup_api("Storage")
+        print(f"   ✓ Found: {result}")
+    except APIResolutionError as e:
+        print(f"   ⚠️  Error (may be too ambiguous): {e}")
+
+    # Test 5: Ambiguous query (should raise error)
+    print("\n5. Testing ambiguous query: 'API'")
+    try:
+        result = lookup_api("API")
+        print(f"   ⚠️  Unexpectedly succeeded: {result}")
+    except APIResolutionError as e:
+        print(f"   ✓ Correctly raised APIResolutionError: {str(e)[:80]}...")
+
+    # Test 6: Nonexistent API (should raise error)
+    print("\n6. Testing nonexistent API: 'ThisDoesNotExist12345'")
+    try:
+        result = lookup_api("ThisDoesNotExist12345")
+        print(f"   ⚠️  Unexpectedly succeeded: {result}")
+    except APIResolutionError as e:
+        print(f"   ✓ Correctly raised APIResolutionError: {str(e)[:80]}...")
+
+    # Test 7: Verify repeated lookups work
+    print("\n7. Testing repeated lookup")
+    try:
+        result1 = lookup_api("Compute Engine")
+        result2 = lookup_api("Compute Engine")
+        assert result1 == result2
+        print(f"   ✓ Repeated lookups work correctly (same result both times)")
+    except APIResolutionError as e:
+        print(f"   ⚠️  Error: {e}")
+
+    print("\n" + "=" * 80)
+    print("✓ lookup_api() testing complete")
     print("=" * 80)

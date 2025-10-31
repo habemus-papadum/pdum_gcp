@@ -4,14 +4,19 @@ This module provides utilities for working with Google Cloud Application Default
 which automatically discovers credentials from the environment (gcloud CLI, service accounts, etc.).
 """
 
+import csv
+import difflib
+from pathlib import Path
 from typing import Generator, Optional
 
+import backoff
 import google.auth
 import google.auth.transport.requests
 from google.auth.credentials import Credentials
 from googleapiclient import discovery
+from googleapiclient.errors import HttpError
 
-from pdum.gcp.types import NO_ORG, Organization, Project
+from pdum.gcp.types import NO_ORG, APIResolutionError, Organization, Project
 
 
 def get_email(*, credentials: Optional[Credentials] = None) -> str:
@@ -310,7 +315,7 @@ def quota_project(*, credentials: Optional[Credentials] = None) -> Project:
 
 
 def walk_projects(
-    *, credentials: Optional[Credentials] = None
+    *, credentials: Optional[Credentials] = None, active_only: bool = True
 ) -> Generator[Project, None, None]:
     """Recursively yield all projects from all accessible organizations.
 
@@ -321,6 +326,9 @@ def walk_projects(
 
     Args:
         credentials: Google Cloud credentials to use. If None, uses Application Default Credentials.
+        active_only: If True (default), only yield projects in ACTIVE state.
+            If False, yield all projects regardless of lifecycle state
+            (including DELETE_REQUESTED and DELETE_IN_PROGRESS).
 
     Yields:
         Project objects from all accessible organizations and their subfolders
@@ -337,6 +345,10 @@ def walk_projects(
         project-2 - My Organization
         nested-project - Development Folder
 
+        >>> # Include deleted/pending-delete projects
+        >>> for project in walk_projects(active_only=False):
+        ...     print(f"{project.id} - {project.lifecycle_state}")
+
     Note:
         This function walks through all organizations, which may take some time
         if you have access to many organizations with many folders and projects.
@@ -350,4 +362,165 @@ def walk_projects(
 
     # Walk through each organization and yield all projects
     for org in organizations:
-        yield from org.walk_projects(credentials=credentials)
+        yield from org.walk_projects(credentials=credentials, active_only=active_only)
+
+
+def _load_api_map() -> dict[str, str]:
+    """Load the API mapping from the bundled text file.
+
+    The API map file is generated using the gcloud command:
+        gcloud services list --available --filter="name:googleapis.com" > src/pdum/gcp/data/api_map.txt
+
+    The file format is:
+        NAME                                   TITLE
+        serviceusage.googleapis.com           Service Usage API
+        compute.googleapis.com                Compute Engine API
+
+    Returns:
+        Dictionary mapping display names (TITLE) to service IDs (NAME)
+
+    Raises:
+        FileNotFoundError: If the API map file is not found
+    """
+    # Find the text file in the package data directory
+    package_dir = Path(__file__).parent
+    txt_path = package_dir / "data" / "api_map.txt"
+
+    if not txt_path.exists():
+        raise FileNotFoundError(
+            f"API map file not found at {txt_path}. "
+            f"Generate it with: gcloud services list --available --filter=\"name:googleapis.com\" > {txt_path}"
+        )
+
+    api_map = {}
+
+    with open(txt_path, "r", encoding="utf-8") as f:
+        # Skip the header line (NAME TITLE)
+        header = f.readline()
+
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+
+            # Split on whitespace - first token is service_id (NAME), rest is display_name (TITLE)
+            parts = line.split(maxsplit=1)
+            if len(parts) == 2:
+                service_id = parts[0]
+                display_name = parts[1]
+
+                # Only include googleapis.com services
+                if "googleapis.com" in service_id:
+                    api_map[display_name] = service_id
+
+    return api_map
+
+
+def lookup_api(display_name: str) -> str:
+    """Resolve an API display name to its service ID using fuzzy matching.
+
+    This function takes a friendly API name (e.g., "Compute Engine", "Big Query")
+    and returns the official service ID (e.g., "compute.googleapis.com",
+    "bigquery.googleapis.com"). It uses fuzzy matching to handle minor typos
+    and variations in naming.
+
+    The function reads from a bundled text file that contains the mapping of all
+    available Google Cloud services. The file is generated using:
+
+        gcloud services list --available --filter="name:googleapis.com" > src/pdum/gcp/data/api_map.txt
+
+    Args:
+        display_name: The human-readable name of the API (e.g., "Compute Engine")
+
+    Returns:
+        The official service ID (e.g., "compute.googleapis.com")
+
+    Raises:
+        APIResolutionError: If no unique match is found or multiple ambiguous matches exist
+        FileNotFoundError: If the API map file is not found
+
+    Example:
+        >>> from pdum.gcp import lookup_api
+        >>> api_id = lookup_api("Compute Engine")
+        >>> print(api_id)
+        compute.googleapis.com
+
+        >>> # Works with partial names and fuzzy matching
+        >>> api_id = lookup_api("Big Query")
+        >>> print(api_id)
+        bigquery.googleapis.com
+
+        >>> # Raises error on ambiguous matches
+        >>> try:
+        ...     lookup_api("Cloud")  # Too ambiguous
+        ... except APIResolutionError as e:
+        ...     print(f"Error: {e}")
+    """
+    # Load the API map from the text file
+    api_map = _load_api_map()
+
+    # 1. Standardize the input for better matching
+    normalized_input = display_name.strip().lower().replace("cloud", "").strip()
+
+    # 2. Check for an exact match or normalized match first
+    # We use a case-insensitive check against normalized keys
+    normalized_keys = {
+        k.lower().replace("cloud", "").strip(): v for k, v in api_map.items()
+    }
+
+    if display_name in api_map:
+        return api_map[display_name]
+
+    if normalized_input in normalized_keys:
+        return normalized_keys[normalized_input]
+
+    # 3. Check for substring matches to detect overly generic short terms
+    # This catches cases like "Cloud" which appears in many API names
+    # Only apply for short terms (< 10 chars) to avoid catching longer specific terms
+    if len(display_name) < 10:
+        substring_matches = [
+            name for name in api_map.keys()
+            if display_name.lower() in name.lower()
+        ]
+
+        if len(substring_matches) > 1:
+            # Too many substring matches - term is too generic
+            # Show a few examples
+            examples = substring_matches[:5]
+            raise APIResolutionError(
+                f"The term '{display_name}' is too generic and matches multiple APIs. "
+                f"Please be more specific. Found matches in: {', '.join(examples)}"
+                + (f" and {len(substring_matches) - 5} more..." if len(substring_matches) > 5 else "")
+            )
+
+        if len(substring_matches) == 1:
+            # Only one substring match, return it
+            return api_map[substring_matches[0]]
+
+    # 4. Perform Fuzzy Matching
+    # Use the full display names from the map as possibilities for fuzzy matching
+    possibilities = list(api_map.keys())
+
+    # difflib.get_close_matches is part of Python's standard library
+    # We use a strict cutoff of 0.6 and look for up to 5 matches.
+    close_matches = difflib.get_close_matches(
+        word=display_name, possibilities=possibilities, n=5, cutoff=0.6
+    )
+
+    # 5. Handle Results
+    if len(close_matches) == 1:
+        # If there is only one "good enough" match, we treat it as the intended target.
+        return api_map[close_matches[0]]
+
+    if len(close_matches) > 1:
+        # Multiple close matches found
+        raise APIResolutionError(
+            f"Multiple close matches found for '{display_name}'. Please be more specific. "
+            f"Did you mean one of these: {', '.join(close_matches)}?"
+        )
+
+    # No matches found
+    raise APIResolutionError(
+        f"No direct match or close fuzzy match found for API '{display_name}'. "
+        f"Please check the spelling or try a different name."
+    )

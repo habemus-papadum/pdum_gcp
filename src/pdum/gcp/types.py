@@ -17,6 +17,12 @@ if TYPE_CHECKING:
     pass
 
 
+class APIResolutionError(Exception):
+    """Raised when an API display name cannot be uniquely resolved to a service ID."""
+
+    pass
+
+
 @dataclass
 class BillingAccount:
     """Information about a GCP billing account.
@@ -126,7 +132,9 @@ class Container:
         """
         raise NotImplementedError("Subclasses must implement create_folder()")
 
-    def walk_projects(self, *, credentials=None) -> Generator[Project, None, None]:
+    def walk_projects(
+        self, *, credentials=None, active_only: bool = True
+    ) -> Generator[Project, None, None]:
         """Recursively yield all projects within this container and its subfolders.
 
         This method performs a depth-first search through the container hierarchy,
@@ -135,6 +143,9 @@ class Container:
 
         Args:
             credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+            active_only: If True (default), only yield projects in ACTIVE state.
+                If False, yield all projects regardless of lifecycle state
+                (including DELETE_REQUESTED and DELETE_IN_PROGRESS).
 
         Yields:
             Project objects found in this container and all nested folders
@@ -155,11 +166,14 @@ class Container:
 
         # Yield all immediate projects of this container
         for project in self.projects(credentials=creds):
+            # Filter by lifecycle state if active_only is True
+            if active_only and project.lifecycle_state != "ACTIVE":
+                continue
             yield project
 
         # Recursively yield projects from all child folders
         for folder in self.folders(credentials=creds):
-            yield from folder.walk_projects(credentials=creds)
+            yield from folder.walk_projects(credentials=creds, active_only=active_only)
 
     def tree(self, *, credentials=None, _prefix: str = "", _is_last: bool = True) -> None:
         """Print a tree view of this container and all its children.
