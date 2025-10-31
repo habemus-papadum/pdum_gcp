@@ -96,6 +96,24 @@ Projects: ['acme-research-admin']
     └── 🎵 acme-lab-archived (DELETE_REQUESTED)
 ```
 
+### Navigate folders explicitly
+
+```python
+from pdum.gcp.types import Folder
+
+platform = next(f for f in target.folders() if f.display_name == "Platform")
+experiments = target.cd("Experiments")
+
+print("Platform parent:", platform.parent_resource_name)
+print("Experiments projects:", [p.id for p in experiments.projects()])
+```
+
+```text
+# Output (sanitized sample)
+Platform parent: organizations/123456789
+Experiments projects: ['acme-lab-001', 'acme-lab-archived']
+```
+
 ### Inspect IAM roles you personally hold
 
 ```python
@@ -159,6 +177,116 @@ for account in billing_accounts:
 # Output (sanitized sample)
 Acme Master Billing 000000-111111-222222 OPEN
 Acme Sandbox Billing 333333-444444-555555 OPEN
+```
+
+### Look up resources by ID
+
+```python
+from pdum.gcp.types import Organization, Project
+
+org_lookup = Organization.lookup("123456789")
+project_lookup = Project.lookup("acme-research-admin")
+
+print("Organization display name:", org_lookup.display_name)
+print("Project parent:", project_lookup.parent.resource_name)
+```
+
+```text
+# Output (sanitized sample)
+Organization display name: Acme Research
+Project parent: organizations/123456789
+```
+
+---
+
+## Mutation Syntax Reference (Do Not Run Here)
+
+The snippets below show the APIs for write operations. They are intentionally **not** executed in this tutorial. Review credentials, confirm the target resources, and double-check prerequisites before running them in your own session.
+
+Most helpers grab credentials from the resource itself or fall back to Application Default Credentials automatically. If you ever need an explicit override, the pattern is:
+
+```python
+from google.auth import default
+
+creds, _ = default()
+```
+
+### Create a Folder
+
+```python
+new_folder = target.create_folder(
+    "Research Staging",
+)
+```
+
+### Create a Project
+
+```python
+from pdum.gcp.types import NO_BILLING_ACCOUNT, Project
+
+project_id = Project.suggest_name(prefix="acme-research")
+# Use the first billing account visible to the organization; fall back to NO_BILLING_ACCOUNT if none.
+billing_account = next(iter(target.billing_accounts()), NO_BILLING_ACCOUNT)
+
+created = target.create_project(
+    project_id,
+    "Acme Research Sandbox",
+    billing_account=billing_account,
+    timeout=600.0,
+    polling_interval=5.0,
+)
+```
+
+### Update Project Billing
+
+```python
+# Reuse an existing billing account from the parent organization
+new_billing_account = next(iter(target.billing_accounts(open_only=True)), None)
+if new_billing_account:
+    created.update_billing_account(new_billing_account)
+
+# Or by ID without a Project instance
+Project.update_billing_account_for_id(
+    project_id,
+    "000000-111111-222222",
+)
+```
+
+### Grant Owners on a Project
+
+```python
+project = Project.lookup(project_id)
+project.add_user_as_owner("trusted-human@example.com")
+```
+
+### Grant Org-Level Owner Roles
+
+```python
+target.add_user_as_owner("trusted-human@example.com")
+
+# Fine-grained control:
+target.add_user_roles(
+    "trusted-human@example.com",
+    roles_to_add=[
+        "roles/resourcemanager.organizationAdmin",
+        "roles/billing.admin",
+    ],
+)
+```
+
+### Enable APIs on a Project
+
+```python
+services = [
+    lookup_api("Compute Engine API"),
+    lookup_api("Cloud Resource Manager API"),
+]
+project.enable_apis(
+    services,
+    timeout=300.0,
+    verbose=True,
+    polling_interval=5.0,
+)
 ```
 
 ---

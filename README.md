@@ -6,9 +6,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
-GCP utils
+A GCP admin toolbox
 
-## What This Project Is
+## Introduction
 
 `pdum_gcp` is a toolbox for seasoned administrators who need to nurture Google Cloud estates that sprawl across multiple organizations. Think of the kind of tasks you might script in Terraform, except you want an interactive, incremental workflow that lets one trusted human explore, prototype, and tidy up quickly. This library intentionally does **not** scale beyond a tiny circle of grizzled operators—ideally a team of one—because it assumes every participating identity has god-like access across those organizations.
 
@@ -28,7 +28,7 @@ Use this library only if you:
 - Inspect IAM with `get_iam_policy()` and `list_roles()` before making changes.
 - Map friendly API names to service IDs via `lookup_api()` and the bundled catalog.
 
-🧭 Ready to see it in action? Follow the [Interactive Admin Tutorial](tutorial.md) for a guided, output-rich walkthrough (with sensitive identifiers anonymized).
+🧭 Ready to see it in action? Follow the [Interactive Admin Tutorial](https://habemus-papadum.github.io/pdum_gcp/tutorial/) for a guided, output-rich walkthrough (with sensitive identifiers anonymized).
 
 
 ## Development
