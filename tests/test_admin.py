@@ -14,6 +14,7 @@ To run these tests locally:
 import os
 
 import pytest
+from google.auth.credentials import AnonymousCredentials
 
 from pdum.gcp.admin import (
     get_email,
@@ -108,9 +109,9 @@ def test_list_organizations():
             # Regular organizations
             assert isinstance(org, Organization)
             assert len(org.id) > 0, "Organization ID should not be empty"
-            assert org.resource_name.startswith(
-                "organizations/"
-            ), "Organization resource_name should start with 'organizations/'"
+            assert org.resource_name.startswith("organizations/"), (
+                "Organization resource_name should start with 'organizations/'"
+            )
             assert org.resource_name.endswith(org.id), "Organization resource_name should end with the ID"
             print(f"  - ID: {org.id} | Name: {org.display_name}")
 
@@ -136,9 +137,7 @@ def test_list_organizations_consistency():
 def test_organization_dataclass():
     """Test that Organization is a proper dataclass with expected attributes."""
     # Create a test organization
-    org = Organization(
-        id="123456789", resource_name="organizations/123456789", display_name="Test Org"
-    )
+    org = Organization(id="123456789", resource_name="organizations/123456789", display_name="Test Org")
 
     # Verify attributes
     assert org.id == "123456789"
@@ -302,12 +301,6 @@ def test_smoke_imports():
         "NO_BILLING_ACCOUNT",
     ):
         assert hasattr(gcp, name)
-
-
-
-
-
-
 
 
 def test_project_suggest_name_with_prefix():
@@ -548,7 +541,6 @@ def test_container_smoke_methods_exist():
         for name in ("tree", "cd", "walk_projects"):
             assert hasattr(cls, name)
 
-
     # NO_ORG should also expose walk_projects
     assert hasattr(NO_ORG, "walk_projects")
 
@@ -612,15 +604,16 @@ def test_cd_empty_path_raises_error():
         display_name="Test Org",
         _credentials=None,
     )
+    creds = AnonymousCredentials()
 
     with pytest.raises(ValueError, match="Path cannot be empty"):
-        org.cd("")
+        org.cd("", credentials=creds)
 
     with pytest.raises(ValueError, match="Path cannot be empty"):
-        org.cd("/")
+        org.cd("/", credentials=creds)
 
     with pytest.raises(ValueError, match="Path cannot be empty"):
-        org.cd("//")
+        org.cd("//", credentials=creds)
 
 
 @manual_test
@@ -958,9 +951,7 @@ def test_walk_projects():
         print(f"  {state}: {count}")
 
     # Verify active_only=False returns at least as many projects as active_only=True
-    assert all_count >= active_count, (
-        f"active_only=False should return >= projects ({all_count} >= {active_count})"
-    )
+    assert all_count >= active_count, f"active_only=False should return >= projects ({all_count} >= {active_count})"
 
     print("\n" + "-" * 80)
     print("Project counts by parent (active only):")
