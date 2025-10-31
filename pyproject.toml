@@ -34,8 +34,7 @@ dependencies = [
     "typer>=0.20.0",
 ]
 
-[project.scripts]
-pdum_gcp = "pdum.gcp.cli:main"
+ 
 
 [project.urls]
 Homepage = "https://github.com/habemus-papadum/gcp"

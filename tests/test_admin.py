@@ -602,6 +602,57 @@ def test_no_org_create_folder_raises_exception():
         NO_ORG.create_folder("another-test")
 
 
+def test_container_has_cd_method():
+    """Test that Container base class has cd method."""
+    assert hasattr(Container, "cd")
+    assert callable(Container.cd)
+
+    # Verify it exists on Organization and Folder
+    assert hasattr(Organization, "cd")
+    assert hasattr(Folder, "cd")
+
+    # Verify it exists on NO_ORG (even though it raises an error)
+    assert hasattr(NO_ORG, "cd")
+
+
+def test_no_org_cd_raises_exception():
+    """Test that NO_ORG.cd() raises TypeError.
+
+    NO_ORG cannot have folders, so attempting to navigate to a folder
+    should raise a TypeError.
+    """
+    import pytest
+
+    with pytest.raises(TypeError, match="NO_ORG cannot have folders"):
+        NO_ORG.cd("test-folder")
+
+    with pytest.raises(TypeError, match="Use cd\\(\\) on an organization or folder instead"):
+        NO_ORG.cd("dev/team-a")
+
+
+def test_cd_empty_path_raises_error():
+    """Test that cd with empty path raises ValueError."""
+    import pytest
+    from pdum.gcp.types import Organization
+
+    # Create a mock organization for testing
+    org = Organization(
+        id="123456789",
+        resource_name="organizations/123456789",
+        display_name="Test Org",
+        _credentials=None,
+    )
+
+    with pytest.raises(ValueError, match="Path cannot be empty"):
+        org.cd("")
+
+    with pytest.raises(ValueError, match="Path cannot be empty"):
+        org.cd("/")
+
+    with pytest.raises(ValueError, match="Path cannot be empty"):
+        org.cd("//")
+
+
 @manual_test
 def test_tree_method():
     """Test that the tree() method prints a nice tree structure.

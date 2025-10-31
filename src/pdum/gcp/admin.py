@@ -9,7 +9,6 @@ import difflib
 from pathlib import Path
 from typing import Generator, Optional
 
-import backoff
 import google.auth
 import google.auth.transport.requests
 from google.auth.credentials import Credentials
@@ -20,32 +19,31 @@ from pdum.gcp.types import NO_ORG, APIResolutionError, Organization, Project
 
 
 def get_email(*, credentials: Optional[Credentials] = None) -> str:
-    """Get the email address associated with the given credentials or ADC.
+    """Return the email for the provided credentials or ADC.
 
-    This function retrieves the credentials (using provided credentials or
-    Application Default Credentials) and extracts the associated email address.
+    Parameters
+    ----------
+    credentials : Credentials, optional
+        Explicit Google Cloud credentials to use. If ``None``, attempts to
+        load Application Default Credentials (ADC).
 
-    ADC discovers credentials from:
-    1. GOOGLE_APPLICATION_CREDENTIALS environment variable (service account key file)
-    2. gcloud CLI user credentials (`gcloud auth application-default login`)
-    3. Compute Engine/Cloud Run/GKE metadata server
-    4. Other Google Cloud environments
+    Returns
+    -------
+    str
+        The email address associated with the active identity.
 
-    Args:
-        credentials: Google Cloud credentials to use. If None, uses Application Default Credentials.
+    Raises
+    ------
+    google.auth.exceptions.DefaultCredentialsError
+        If no credentials can be found.
+    AttributeError
+        If an email cannot be extracted from the credential type.
 
-    Returns:
-        The email address associated with the credentials
-
-    Raises:
-        google.auth.exceptions.DefaultCredentialsError: If no credentials can be found
-        AttributeError: If the credentials type doesn't have an email/service_account_email attribute
-
-    Example:
-        >>> from pdum.gcp.admin import get_email
-        >>> email = get_email()
-        >>> print(f"Using credentials for: {email}")
-        Using credentials for: user@example.com
+    Examples
+    --------
+    >>> from pdum.gcp.admin import get_email
+    >>> get_email()  # doctest: +SKIP
+    'user@example.com'
     """
     # Get credentials if not provided
     if credentials is None:
@@ -133,38 +131,33 @@ def _extract_email_from_credentials(credentials: Credentials) -> Optional[str]:
 
 
 def list_organizations(*, credentials: Optional[Credentials] = None) -> list[Organization]:
-    """List all Google Cloud organizations accessible to the given credentials or ADC.
+    """List organizations visible to the caller.
 
-    This function uses the Cloud Resource Manager V1 API to list all organizations
-    for which the current user or service account has at least basic permissions
-    (e.g., Viewer role).
+    Uses Cloud Resource Manager v1 to search all organizations the current
+    identity can see. If projects exist outside an organization, ``NO_ORG`` is
+    appended to the result.
 
-    If there are any projects without an organization parent, NO_ORG will be included
-    in the returned list.
+    Parameters
+    ----------
+    credentials : Credentials, optional
+        Explicit credentials to use. If ``None``, uses ADC.
 
-    Args:
-        credentials: Google Cloud credentials to use. If None, uses Application Default Credentials.
+    Returns
+    -------
+    list[Organization]
+        Organizations accessible to the caller, plus ``NO_ORG`` if applicable.
 
-    Returns:
-        List of Organization/Container objects representing accessible organizations,
-        including NO_ORG if there are projects without an organization parent
+    Raises
+    ------
+    google.auth.exceptions.DefaultCredentialsError
+        If no credentials can be found.
+    googleapiclient.errors.HttpError
+        If the API call fails.
 
-    Raises:
-        google.auth.exceptions.DefaultCredentialsError: If no credentials can be found
-        googleapiclient.errors.HttpError: If the API call fails
-
-    Example:
-        >>> from pdum.gcp.admin import list_organizations
-        >>> organizations = list_organizations()
-        >>> for org in organizations:
-        ...     print(f"ID: {org.id} | Name: {org.display_name}")
-        ID: 123456789 | Name: My Organization
-        ID:  | Name: No Organization  # If there are projects without org
-
-    Note:
-        This function requires the Cloud Resource Manager API to be accessible.
-        The user must have at least the `resourcemanager.organizations.get` permission
-        on the organizations they want to see.
+    Notes
+    -----
+    Requires the Cloud Resource Manager API and basic permissions on target
+    organizations (e.g., Viewer).
     """
     # Import here to avoid circular dependency
     from pdum.gcp.types import NO_ORG
@@ -216,34 +209,33 @@ def list_organizations(*, credentials: Optional[Credentials] = None) -> list[Org
 
 
 def quota_project(*, credentials: Optional[Credentials] = None) -> Project:
-    """Get the quota project from Application Default Credentials.
+    """Return the quota (billing) project inferred from the environment.
 
-    This function retrieves the project ID from the environment (via google.auth.default())
-    and fetches the full project details to return as a Project object. The quota project
-    is the project that will be billed for API requests.
+    Parameters
+    ----------
+    credentials : Credentials, optional
+        Explicit credentials to use for API calls. The project id is still
+        derived from the environment or platform metadata.
 
-    The project ID is determined from:
-    1. GOOGLE_CLOUD_PROJECT environment variable
-    2. gcloud CLI configuration (`gcloud config get-value project`)
-    3. GCE/Cloud Run/GKE metadata server
-    4. Other Google Cloud environments
+    Returns
+    -------
+    Project
+        The resolved quota project.
 
-    Args:
-        credentials: Google Cloud credentials to use. If None, uses Application Default Credentials.
+    Raises
+    ------
+    google.auth.exceptions.DefaultCredentialsError
+        If no credentials can be found.
+    ValueError
+        If a project id cannot be determined.
+    googleapiclient.errors.HttpError
+        If the project lookup API call fails.
 
-    Returns:
-        A Project object representing the quota project
-
-    Raises:
-        google.auth.exceptions.DefaultCredentialsError: If no credentials can be found
-        ValueError: If no project ID can be determined from the environment
-        googleapiclient.errors.HttpError: If the API call fails
-
-    Example:
-        >>> from pdum.gcp.admin import quota_project
-        >>> project = quota_project()
-        >>> print(f"Quota Project: {project.id}")
-        Quota Project: my-project-123
+    Examples
+    --------
+    >>> from pdum.gcp.admin import quota_project
+    >>> quota_project()  # doctest: +SKIP
+    Project(id='my-project-123', ...)
     """
     # Get credentials and project ID from Application Default Credentials
     if credentials is None:
@@ -259,99 +251,38 @@ def quota_project(*, credentials: Optional[Credentials] = None) -> Project:
             "Set GOOGLE_CLOUD_PROJECT environment variable or configure gcloud CLI with a default project."
         )
 
-    # Build the Resource Manager V1 service client
-    crm_service = discovery.build(
-        "cloudresourcemanager", "v1", credentials=credentials, cache_discovery=False
-    )
-
-    # Get the project details
-    project_resource = crm_service.projects().get(projectId=project_id).execute()
-
-    # Determine the parent container
-    parent_info = project_resource.get("parent", {})
-    parent_type = parent_info.get("type")
-    parent_id = parent_info.get("id")
-
-    if parent_type == "organization":
-        parent_resource_name = f"organizations/{parent_id}"
-        # Get organization details
-        org_resource = crm_service.organizations().get(name=parent_resource_name).execute()
-        parent = Organization(
-            id=parent_id,
-            resource_name=parent_resource_name,
-            display_name=org_resource.get("displayName", ""),
-            _credentials=credentials,
-        )
-    elif parent_type == "folder":
-        parent_resource_name = f"folders/{parent_id}"
-        # Import here to avoid circular dependency
-        from pdum.gcp.types import Folder
-
-        # Get folder details using CRM v2 API
-        crm_v2_service = discovery.build(
-            "cloudresourcemanager", "v2", credentials=credentials, cache_discovery=False
-        )
-        folder_resource = crm_v2_service.folders().get(name=parent_resource_name).execute()
-        parent = Folder(
-            id=parent_id,
-            resource_name=parent_resource_name,
-            display_name=folder_resource.get("displayName", ""),
-            parent_resource_name=folder_resource.get("parent", ""),
-            _credentials=credentials,
-        )
-    else:
-        # No organization or folder parent
-        parent = NO_ORG
-
-    # Create and return the Project object
-    return Project(
-        id=project_resource["projectId"],
-        name=project_resource.get("name", ""),
-        project_number=str(project_resource.get("projectNumber", "")),
-        lifecycle_state=project_resource.get("lifecycleState", ""),
-        parent=parent,
-        _credentials=credentials,
-    )
+    # Use Project.lookup() to get the full project details
+    return Project.lookup(project_id, credentials=credentials)
 
 
 def walk_projects(
     *, credentials: Optional[Credentials] = None, active_only: bool = True
 ) -> Generator[Project, None, None]:
-    """Recursively yield all projects from all accessible organizations.
+    """Yield all projects across all accessible organizations.
 
-    This function lists all organizations accessible to the credentials (or ADC),
-    then recursively walks through each organization's folder hierarchy to yield
-    all projects found. This includes projects at the organization level, within
-    folders, and within nested folders.
+    Parameters
+    ----------
+    credentials : Credentials, optional
+        Explicit credentials to use. If ``None``, uses ADC.
+    active_only : bool, default True
+        If ``True``, yields only ACTIVE projects. If ``False``, yields all
+        lifecycle states.
 
-    Args:
-        credentials: Google Cloud credentials to use. If None, uses Application Default Credentials.
-        active_only: If True (default), only yield projects in ACTIVE state.
-            If False, yield all projects regardless of lifecycle state
-            (including DELETE_REQUESTED and DELETE_IN_PROGRESS).
+    Yields
+    ------
+    Project
+        Projects from organizations and nested folders.
 
-    Yields:
-        Project objects from all accessible organizations and their subfolders
+    Raises
+    ------
+    google.auth.exceptions.DefaultCredentialsError
+        If no credentials can be found.
+    googleapiclient.errors.HttpError
+        If any API call fails.
 
-    Raises:
-        google.auth.exceptions.DefaultCredentialsError: If no credentials can be found
-        googleapiclient.errors.HttpError: If any API call fails
-
-    Example:
-        >>> from pdum.gcp.admin import walk_projects
-        >>> for project in walk_projects():
-        ...     print(f"{project.id} - {project.parent.display_name}")
-        project-1 - My Organization
-        project-2 - My Organization
-        nested-project - Development Folder
-
-        >>> # Include deleted/pending-delete projects
-        >>> for project in walk_projects(active_only=False):
-        ...     print(f"{project.id} - {project.lifecycle_state}")
-
-    Note:
-        This function walks through all organizations, which may take some time
-        if you have access to many organizations with many folders and projects.
+    Notes
+    -----
+    Traversal may take time in estates with many organizations/folders.
     """
     # Get credentials if not provided
     if credentials is None:
@@ -366,21 +297,22 @@ def walk_projects(
 
 
 def _load_api_map() -> dict[str, str]:
-    """Load the API mapping from the bundled text file.
+    """Load the display-name → service-id map from the bundled data file.
 
-    The API map file is generated using the gcloud command:
-        gcloud services list --available --filter="name:googleapis.com" > src/pdum/gcp/data/api_map.txt
+    The file is generated periodically with:
 
-    The file format is:
-        NAME                                   TITLE
-        serviceusage.googleapis.com           Service Usage API
-        compute.googleapis.com                Compute Engine API
+    ``gcloud services list --available --filter="name:googleapis.com" > src/pdum/gcp/data/api_map.txt``
 
-    Returns:
-        Dictionary mapping display names (TITLE) to service IDs (NAME)
+    Returns
+    -------
+    dict[str, str]
+        Mapping of human-readable display names (``TITLE``) to service ids
+        (``NAME``, e.g., ``compute.googleapis.com``).
 
-    Raises:
-        FileNotFoundError: If the API map file is not found
+    Raises
+    ------
+    FileNotFoundError
+        If the bundled map file is missing.
     """
     # Find the text file in the package data directory
     package_dir = Path(__file__).parent
@@ -417,44 +349,35 @@ def _load_api_map() -> dict[str, str]:
 
 
 def lookup_api(display_name: str) -> str:
-    """Resolve an API display name to its service ID using fuzzy matching.
+    """Resolve a human-friendly API name to its service id.
 
-    This function takes a friendly API name (e.g., "Compute Engine", "Big Query")
-    and returns the official service ID (e.g., "compute.googleapis.com",
-    "bigquery.googleapis.com"). It uses fuzzy matching to handle minor typos
-    and variations in naming.
+    Uses normalization, substring checks (for short queries), and fuzzy matching
+    against the bundled API map.
 
-    The function reads from a bundled text file that contains the mapping of all
-    available Google Cloud services. The file is generated using:
+    Parameters
+    ----------
+    display_name : str
+        Human-readable API name, e.g. ``"Compute Engine"``.
 
-        gcloud services list --available --filter="name:googleapis.com" > src/pdum/gcp/data/api_map.txt
+    Returns
+    -------
+    str
+        Service id such as ``"compute.googleapis.com"``.
 
-    Args:
-        display_name: The human-readable name of the API (e.g., "Compute Engine")
+    Raises
+    ------
+    APIResolutionError
+        If no match or multiple ambiguous matches are found.
+    FileNotFoundError
+        If the API map data file is missing.
 
-    Returns:
-        The official service ID (e.g., "compute.googleapis.com")
-
-    Raises:
-        APIResolutionError: If no unique match is found or multiple ambiguous matches exist
-        FileNotFoundError: If the API map file is not found
-
-    Example:
-        >>> from pdum.gcp import lookup_api
-        >>> api_id = lookup_api("Compute Engine")
-        >>> print(api_id)
-        compute.googleapis.com
-
-        >>> # Works with partial names and fuzzy matching
-        >>> api_id = lookup_api("Big Query")
-        >>> print(api_id)
-        bigquery.googleapis.com
-
-        >>> # Raises error on ambiguous matches
-        >>> try:
-        ...     lookup_api("Cloud")  # Too ambiguous
-        ... except APIResolutionError as e:
-        ...     print(f"Error: {e}")
+    Examples
+    --------
+    >>> from pdum.gcp import lookup_api
+    >>> lookup_api("Compute Engine")  # doctest: +SKIP
+    'compute.googleapis.com'
+    >>> lookup_api("Big Query")  # doctest: +SKIP
+    'bigquery.googleapis.com'
     """
     # Load the API map from the text file
     api_map = _load_api_map()

@@ -176,36 +176,30 @@ class Container:
             yield from folder.walk_projects(credentials=creds, active_only=active_only)
 
     def tree(self, *, credentials=None, _prefix: str = "", _is_last: bool = True) -> None:
-        """Print a tree view of this container and all its children.
+        """Print a visual tree of this container and its children.
 
-        This method recursively prints a visual tree structure showing:
-        - The current container (with 🌺 for organizations, 🎸 for folders, 🐞 for NO_ORG)
-        - All child folders (with 🎸)
-        - All child projects (with 🎵)
+        The output includes organizations (🌺), folders (🎸), and projects (🎵),
+        using box-drawing characters for structure.
 
-        The tree uses unicode box-drawing characters:
-        - ├── for branches
-        - └── for the last item
-        - │   for vertical continuation
-        - "    " for empty space
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
+        _prefix : str, optional
+            Internal indentation prefix. Do not pass manually.
+        _is_last : bool, optional
+            Internal flag for branch drawing. Do not pass manually.
 
-        Args:
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
-            _prefix: Internal parameter for indentation (do not use)
-            _is_last: Internal parameter for branch drawing (do not use)
-
-        Example:
-            >>> from pdum.gcp import list_organizations
-            >>> orgs = list_organizations()
-            >>> for org in orgs:
-            ...     org.tree()
-            🌺 My Organization (organizations/123456789)
-            ├── 🎸 Development (folders/111)
-            │   ├── 🎵 dev-project-1 (ACTIVE)
-            │   └── 🎵 dev-project-2 (ACTIVE)
-            ├── 🎸 Production (folders/222)
-            │   └── 🎵 prod-project-1 (ACTIVE)
-            └── 🎵 shared-project (ACTIVE)
+        Examples
+        --------
+        >>> from pdum.gcp import list_organizations
+        >>> for org in list_organizations():  # doctest: +SKIP
+        ...     org.tree()  # doctest: +ELLIPSIS
+        🌺 My Organization (organizations/123456789)
+        ├── 🎸 Development (folders/111)
+        │   ├── 🎵 dev-project-1 (ACTIVE)
+        │   └── 🎵 dev-project-2 (ACTIVE)
+        └── ...
         """
         creds = self._get_credentials(credentials=credentials)
 
@@ -280,6 +274,75 @@ class Container:
                 print(f"{_prefix}{branch}🎸 {child.display_name} ({child.resource_name})")
                 # Recursively print the folder's children
                 child._tree_children(credentials=creds, _prefix=new_prefix)
+
+    def cd(self, path: str, *, credentials=None) -> Folder:
+        """Navigate to a child folder using a slash-separated path.
+
+        Parameters
+        ----------
+        path : str
+            Path like ``"dev/team-a/project-folder"``. Leading/trailing slashes are ignored.
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
+
+        Returns
+        -------
+        Folder
+            The matching folder.
+
+        Raises
+        ------
+        ValueError
+            If the path is empty or a component is not found.
+        TypeError
+            If invoked on ``NO_ORG`` (which cannot have folders).
+
+        Examples
+        --------
+        >>> from pdum.gcp import list_organizations
+        >>> org = list_organizations()[0]  # doctest: +SKIP
+        >>> org.cd("dev/team-a")  # doctest: +SKIP
+        Folder(...)
+        """
+        creds = self._get_credentials(credentials=credentials)
+
+        # Strip leading and trailing slashes and split the path
+        path = path.strip("/")
+
+        # Handle empty path
+        if not path:
+            raise ValueError("Path cannot be empty")
+
+        # Split the path into components
+        components = path.split("/")
+
+        # Start with the current container
+        current_container: Container = self
+
+        # Navigate through each path component
+        for component in components:
+            # List all folders in the current container
+            folders = current_container.folders(credentials=creds)
+
+            # Find the folder matching this component
+            matching_folder = None
+            for folder in folders:
+                if folder.display_name == component:
+                    matching_folder = folder
+                    break
+
+            # If no matching folder found, raise an error
+            if matching_folder is None:
+                raise ValueError(
+                    f"Folder '{component}' not found in {current_container.display_name}. "
+                    f"Available folders: {', '.join(f.display_name for f in folders) or '(none)'}"
+                )
+
+            # Move to the matching folder
+            current_container = matching_folder
+
+        # Return the final folder
+        return current_container
 
 
 @dataclass
@@ -430,26 +493,28 @@ class Organization(Container):
         )
 
     def billing_accounts(self, *, credentials=None) -> list[BillingAccount]:
-        """List billing accounts associated with this organization.
+        """List billing accounts scoped to this organization.
 
-        This method retrieves all billing accounts that are linked to this organization.
-        The user must have the "Billing Account Viewer" role to see billing accounts.
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
 
-        Args:
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+        Returns
+        -------
+        list[BillingAccount]
+            Billing accounts linked to this organization.
 
-        Returns:
-            List of BillingAccount objects associated with this organization
+        Raises
+        ------
+        googleapiclient.errors.HttpError
+            If the API call fails.
 
-        Raises:
-            googleapiclient.errors.HttpError: If the API call fails
-
-        Example:
-            >>> org = list_organizations()[0]
-            >>> billing_accounts = org.billing_accounts()
-            >>> for account in billing_accounts:
-            ...     print(f"{account.display_name}: {account.id}")
-            My Billing Account: 012345-567890-ABCDEF
+        Examples
+        --------
+        >>> org = list_organizations()[0]  # doctest: +SKIP
+        >>> [b.display_name for b in org.billing_accounts()]  # doctest: +SKIP
+        ['My Billing Account', ...]
         """
         creds = self._get_credentials(credentials=credentials)
 
@@ -483,6 +548,51 @@ class Organization(Container):
             )
 
         return billing_accounts
+
+    @classmethod
+    def lookup(cls, org_id: str, *, credentials: Optional[Credentials] = None) -> "Organization":
+        """Look up an organization by its organization ID.
+
+        This method fetches the organization details from the Cloud Resource Manager API
+        and returns an Organization object.
+
+        Args:
+            org_id: The organization ID (numeric string, e.g., "123456789")
+            credentials: Google Cloud credentials to use. If None, uses Application Default Credentials.
+
+        Returns:
+            An Organization object representing the organization
+
+        Raises:
+            google.auth.exceptions.DefaultCredentialsError: If no credentials can be found
+            googleapiclient.errors.HttpError: If the API call fails (e.g., organization not found)
+
+        Example:
+            >>> from pdum.gcp import Organization
+            >>> org = Organization.lookup("123456789")
+            >>> print(f"Organization: {org.display_name}")
+            Organization: My Organization
+        """
+        # Get credentials if not provided
+        if credentials is None:
+            credentials, _ = google.auth.default()
+
+        # Build the Resource Manager V1 service client
+        crm_service = discovery.build(
+            "cloudresourcemanager", "v1", credentials=credentials, cache_discovery=False
+        )
+
+        # Get the organization details
+        resource_name = f"organizations/{org_id}"
+        org_resource = crm_service.organizations().get(name=resource_name).execute()
+
+        # Create and return the Organization object
+        return cls(
+            id=org_id,
+            resource_name=resource_name,
+            display_name=org_resource.get("displayName", ""),
+            _credentials=credentials,
+        )
 
 
 @dataclass
@@ -704,30 +814,28 @@ class Project:
         return creds
 
     def enabled_apis(self, *, credentials=None) -> list[str]:
-        """List all enabled APIs for this project.
+        """List enabled APIs for this project.
 
-        This method retrieves all APIs/services that are currently enabled for this project.
-        The user must have the "Service Usage Consumer" role or appropriate permissions
-        to list enabled services.
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
 
-        Args:
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+        Returns
+        -------
+        list[str]
+            Service names, e.g., ``['compute.googleapis.com', 'storage.googleapis.com']``.
 
-        Returns:
-            List of enabled API service names (e.g., ['compute.googleapis.com', 'storage.googleapis.com'])
+        Raises
+        ------
+        googleapiclient.errors.HttpError
+            If the API call fails.
 
-        Raises:
-            googleapiclient.errors.HttpError: If the API call fails
-
-        Example:
-            >>> project = quota_project()
-            >>> apis = project.enabled_apis()
-            >>> print(f"Found {len(apis)} enabled APIs")
-            >>> for api in apis:
-            ...     print(f"  - {api}")
-            Found 15 enabled APIs
-              - compute.googleapis.com
-              - storage.googleapis.com
+        Examples
+        --------
+        >>> from pdum.gcp.admin import quota_project
+        >>> quota_project().enabled_apis()  # doctest: +SKIP
+        ['compute.googleapis.com', ...]
         """
         creds = self._get_credentials(credentials=credentials)
 
@@ -924,6 +1032,88 @@ class Project:
         return BillingAccount(id=billing_account_id, display_name=display_name)
 
     @classmethod
+    def lookup(cls, project_id: str, *, credentials: Optional[Credentials] = None) -> "Project":
+        """Look up a project by its project ID.
+
+        This method fetches the full project details from the Cloud Resource Manager API
+        and returns a Project object with the project's parent container resolved.
+
+        Args:
+            project_id: The project ID (e.g., "my-project-123")
+            credentials: Google Cloud credentials to use. If None, uses Application Default Credentials.
+
+        Returns:
+            A Project object representing the project
+
+        Raises:
+            google.auth.exceptions.DefaultCredentialsError: If no credentials can be found
+            googleapiclient.errors.HttpError: If the API call fails (e.g., project not found)
+
+        Example:
+            >>> from pdum.gcp import Project
+            >>> project = Project.lookup("my-project-123")
+            >>> print(f"Project: {project.name} (parent: {project.parent.display_name})")
+            Project: My Project (parent: My Organization)
+        """
+        # Get credentials if not provided
+        if credentials is None:
+            credentials, _ = google.auth.default()
+
+        # Build the Resource Manager V1 service client
+        crm_service = discovery.build(
+            "cloudresourcemanager", "v1", credentials=credentials, cache_discovery=False
+        )
+
+        # Get the project details
+        project_resource = crm_service.projects().get(projectId=project_id).execute()
+
+        # Determine the parent container
+        parent_info = project_resource.get("parent", {})
+        parent_type = parent_info.get("type")
+        parent_id = parent_info.get("id")
+
+        if parent_type == "organization":
+            parent_resource_name = f"organizations/{parent_id}"
+            # Get organization details
+            org_resource = crm_service.organizations().get(name=parent_resource_name).execute()
+            parent = Organization(
+                id=parent_id,
+                resource_name=parent_resource_name,
+                display_name=org_resource.get("displayName", ""),
+                _credentials=credentials,
+            )
+        elif parent_type == "folder":
+            parent_resource_name = f"folders/{parent_id}"
+            # Get folder details using CRM v2 API
+            crm_v2_service = discovery.build(
+                "cloudresourcemanager", "v2", credentials=credentials, cache_discovery=False
+            )
+            folder_resource = crm_v2_service.folders().get(name=parent_resource_name).execute()
+            parent = Folder(
+                id=parent_id,
+                resource_name=parent_resource_name,
+                display_name=folder_resource.get("displayName", ""),
+                parent_resource_name=folder_resource.get("parent", ""),
+                _credentials=credentials,
+            )
+        else:
+            # No organization or folder parent
+            # Import here to avoid circular dependency
+            from pdum.gcp.types import NO_ORG
+
+            parent = NO_ORG
+
+        # Create and return the Project object
+        return cls(
+            id=project_resource["projectId"],
+            name=project_resource.get("name", ""),
+            project_number=str(project_resource.get("projectNumber", "")),
+            lifecycle_state=project_resource.get("lifecycleState", ""),
+            parent=parent,
+            _credentials=credentials,
+        )
+
+    @classmethod
     def suggest_name(cls, *, prefix: Optional[str] = None, random_digits: int = 5) -> str:
         """Suggest a GCP project name with optional prefix and random digits.
 
@@ -1097,6 +1287,23 @@ class _NoOrgSentinel(Container):
             "NO_ORG cannot have folders. Projects without an organization parent "
             "cannot contain folders. To create a folder, you must first create or "
             "use an existing organization or folder as the parent."
+        )
+
+    def cd(self, path: str, *, credentials=None) -> Folder:
+        """Navigate to a folder at the given path.
+
+        NO_ORG cannot have folders, so cd is not supported.
+
+        Args:
+            path: The folder path (ignored)
+            credentials: Google Cloud credentials to use (ignored)
+
+        Raises:
+            TypeError: Always raised because NO_ORG cannot have folders
+        """
+        raise TypeError(
+            "NO_ORG cannot have folders. Projects without an organization parent "
+            "cannot contain folders. Use cd() on an organization or folder instead."
         )
 
     def projects(self, *, credentials=None) -> list[Project]:
