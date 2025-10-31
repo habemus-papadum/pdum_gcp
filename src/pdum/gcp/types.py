@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Generator, Optional
+from typing import TYPE_CHECKING, Generator, Iterable, Optional
 
 import google.auth
 from google.auth.credentials import Credentials
@@ -17,6 +17,15 @@ from pdum.gcp._clients import cloud_billing, crm_v1, crm_v3, service_usage
 
 if TYPE_CHECKING:
     pass
+
+
+# Required APIs for core functionality used by this package
+_REQUIRED_APIS: tuple[str, ...] = (
+    "cloudresourcemanager.googleapis.com",
+    "iam.googleapis.com",
+    "serviceusage.googleapis.com",
+    "cloudbilling.googleapis.com",
+)
 
 
 class APIResolutionError(Exception):
@@ -268,17 +277,42 @@ class Container(Resource):
             err = operation["error"]
             raise RuntimeError(f"Project creation failed: {err.get('code')}: {err.get('message')}")
 
-        # Attach billing if a real account provided
-        if billing_account:
-            billing = cloud_billing(creds)
-            billing_body = {
-                "billingAccountName": f"billingAccounts/{billing_account.id}",
-                "billingEnabled": True,
-            }
-            billing.projects().updateBillingInfo(name=f"projects/{project_id}", body=billing_body).execute()
+        # After creation, wait until the project is visible via GET
+        get_start = time.time()
+        while True:
+            try:
+                crm.projects().get(name=f"projects/{project_id}").execute()
+                break
+            except Exception:
+                if time.time() - get_start > timeout:
+                    raise TimeoutError(
+                        f"Project get timed out after {timeout}s for 'projects/{project_id}'"
+                    )
+                time.sleep(polling_interval)
 
-        # Return a fully materialized Project
-        return Project.lookup(project_id, credentials=creds)
+        # Attach billing using the Project API if a real account provided
+        if billing_account:
+            Project.update_billing_account_for_id(
+                project_id, billing_account, credentials=creds
+            )
+
+        # Finally, return a fully materialized Project (poll until searchable)
+        search_start = time.time()
+        while True:
+            try:
+                return Project.lookup(project_id, credentials=creds)
+            except FileNotFoundError:
+                if time.time() - search_start > timeout:
+                    # As a fallback, construct a minimal Project object
+                    return Project(
+                        id=project_id,
+                        name=display_name,
+                        project_number="",
+                        lifecycle_state="",
+                        parent=self,
+                        _credentials=creds,
+                    )
+                time.sleep(polling_interval)
     def walk_projects(
         self, *, credentials=None, active_only: bool = True
     ) -> Generator[Project, None, None]:
@@ -1264,6 +1298,111 @@ class Project(Resource):
         status = "OPEN" if is_open else "CLOSED"
 
         return BillingAccount(id=billing_account_id, display_name=display_name, status=status)
+
+    def bootstrap_quota_project(
+        self,
+        *,
+        credentials=None,
+        required_apis: Optional[Iterable[str]] = None,
+        timeout: float = 300.0,
+        verbose: bool = True,
+        polling_interval: float = 5.0,
+    ) -> dict:
+        """Enable the required APIs for using this project as a quota project.
+
+        Parameters
+        ----------
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
+        required_apis : Iterable[str], optional
+            Override the default set of required APIs; if omitted, uses the
+            package's internal required API list.
+        timeout : float, default 300.0
+            Max seconds to wait for the enable operation.
+        verbose : bool, default True
+            Print progress dots during polling when enabling APIs.
+        polling_interval : float, default 5.0
+            Seconds between polls.
+
+        Returns
+        -------
+        dict
+            The completed operation if APIs were enabled, or a no-op marker
+            dict with ``{"done": True, "result": "no-op"}`` if everything
+            was already enabled.
+        """
+        creds = self._get_credentials(credentials=credentials)
+
+        current = set(self.enabled_apis(credentials=creds))
+        required = set(_REQUIRED_APIS if required_apis is None else required_apis)
+        to_enable = sorted(required - current)
+
+        if not to_enable:
+            return {"done": True, "result": "no-op", "enabled": sorted(current)}
+
+        return self.enable_apis(
+            to_enable,
+            credentials=creds,
+            timeout=timeout,
+            verbose=verbose,
+            polling_interval=polling_interval,
+        )
+
+    def update_billing_account(self, billing_account: "BillingAccount | str | None", *, credentials=None) -> dict:
+        """Update this project's billing account.
+
+        Parameters
+        ----------
+        billing_account : BillingAccount | str | None
+            The target billing account to attach. Accepts a ``BillingAccount``
+            instance, a billing account id string (e.g., ``"012345-567890-ABCDEF"``),
+            or ``NO_BILLING_ACCOUNT``/``None`` to disable billing on the project.
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
+
+        Returns
+        -------
+        dict
+            The updated ProjectBillingInfo resource.
+
+        Notes
+        -----
+        This mutates billing configuration. Ensure you have the necessary
+        Cloud Billing permissions (e.g., roles/billing.user on the account).
+        """
+        creds = self._get_credentials(credentials=credentials)
+        billing = cloud_billing(creds)
+
+        if billing_account is None:
+            ba_name = ""
+        elif isinstance(billing_account, BillingAccount):
+            ba_name = f"billingAccounts/{billing_account.id}"
+        elif isinstance(billing_account, str):
+            ba_name = f"billingAccounts/{billing_account}"
+        else:
+            ba_name = ""
+
+        body = {"billingAccountName": ba_name}
+        updated = billing.projects().updateBillingInfo(name=f"projects/{self.id}", body=body).execute()
+        return updated
+
+    @classmethod
+    def update_billing_account_for_id(
+        cls, project_id: str, billing_account: "BillingAccount | str | None", *, credentials=None
+    ) -> dict:
+        """Class-level variant to update billing using a project id.
+
+        See ``update_billing_account`` for parameter semantics.
+        """
+        temp = cls(
+            id=project_id,
+            name="",
+            project_number="",
+            lifecycle_state="",
+            parent=NO_ORG,
+            _credentials=credentials,
+        )
+        return temp.update_billing_account(billing_account, credentials=credentials)
 
     @classmethod
     def lookup(cls, project_id: str, *, credentials: Optional[Credentials] = None) -> "Project":

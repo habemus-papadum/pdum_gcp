@@ -1,6 +1,7 @@
 """Utilities and tools for Google Cloud"""
 
 from pdum.gcp.admin import (
+    doctor,
     get_email,
     get_iam_policy,
     list_organizations,
@@ -27,6 +28,7 @@ __all__ = [
     "__version__",
     "get_email",
     "get_iam_policy",
+    "doctor",
     "list_roles",
     "list_organizations",
     "lookup_api",

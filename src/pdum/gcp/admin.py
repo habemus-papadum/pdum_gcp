@@ -11,11 +11,21 @@ from typing import Generator, Optional
 import google.auth
 import google.auth.transport.requests
 from google.auth.credentials import Credentials
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 
 from pdum.gcp._clients import crm_v1
 from pdum.gcp._helpers import _get_iam_policy as _get_iam_policy_internal
 from pdum.gcp._helpers import _list_roles as _list_roles_internal
-from pdum.gcp.types import APIResolutionError, Organization, Project, Resource, Role
+from pdum.gcp.types import (
+    _REQUIRED_APIS,
+    APIResolutionError,
+    Organization,
+    Project,
+    Resource,
+    Role,
+)
 
 # Cache for API map to avoid repeated file I/O
 _API_MAP_CACHE: dict[str, str] | None = None
@@ -209,16 +219,17 @@ def list_organizations(*, credentials: Optional[Credentials] = None) -> list[Org
     return organizations
 
 
-def quota_project(*, credentials: Optional[Credentials] = None, project_id: Optional[str] = None) -> Project:
-    """Return the quota (billing) project inferred from the environment.
+def quota_project(*, credentials: Optional[Credentials] = None) -> Project:
+    """Return the active quota (billing) project from ADC credentials.
+
+    This reads ``credentials.quota_project_id`` from Application Default
+    Credentials (ADC) and looks up the corresponding Project. The quota
+    project determines which project is billed for requests made with ADC.
 
     Parameters
     ----------
     credentials : Credentials, optional
-        Explicit credentials to use for API calls.
-    project_id : str, optional
-        Explicit project id to use. If omitted, derives from the environment
-        or platform metadata via ADC.
+        Explicit credentials to use. If ``None``, materializes ADC.
 
     Returns
     -------
@@ -230,34 +241,33 @@ def quota_project(*, credentials: Optional[Credentials] = None, project_id: Opti
     google.auth.exceptions.DefaultCredentialsError
         If no credentials can be found.
     ValueError
-        If a project id cannot be determined.
+        If the credentials do not have a quota project set. Use:
+        ``gcloud auth application-default set-quota-project <PROJECT_ID>``.
     googleapiclient.errors.HttpError
         If the project lookup API call fails.
 
     Examples
     --------
     >>> from pdum.gcp.admin import quota_project
-    >>> quota_project()  # doctest: +SKIP
-    Project(id='my-project-123', ...)
+    >>> qp = quota_project()  # doctest: +SKIP
+    >>> qp.id  # doctest: +SKIP
+    'my-quota-project'
     """
-    # Resolve credentials if not provided
+    # Materialize credentials
     if credentials is None:
         credentials, _ = google.auth.default()
 
-    # Determine project id
-    if project_id is None:
-        # Derive from environment/metadata
-        _, project_id = google.auth.default()
-
-    # Validate that we got a project ID
-    if not project_id:
+    # Prefer the quota project from the credentials object
+    quota_id = getattr(credentials, "quota_project_id", None)
+    if not quota_id:
         raise ValueError(
-            "No project ID could be determined from the environment. "
-            "Set GOOGLE_CLOUD_PROJECT environment variable or configure gcloud CLI with a default project."
+            "No quota project is configured on ADC credentials.\n\n"
+            "Set a quota project for Application Default Credentials:\n\n"
+            "    gcloud auth application-default set-quota-project <PROJECT_ID>\n\n"
+            "Then re-run this method."
         )
 
-    # Use Project.lookup() to get the full project details
-    return Project.lookup(project_id, credentials=credentials)
+    return Project.lookup(quota_id, credentials=credentials)
 
 
 def walk_projects(
@@ -506,3 +516,127 @@ def list_roles(
     return _list_roles_internal(
         credentials=creds, resource_name=resource.full_resource_name(), user_email=user_email
     )
+
+
+def doctor(*, credentials: Optional[Credentials] = None, console: Optional[Console] = None) -> None:
+    """Run environment diagnostics for pdum.gcp.
+
+    This prints a human-friendly report:
+    1) Identity and quota project status (ADC).
+    2) Enabled APIs on the quota project vs. required APIs used by this package.
+    3) Organization-level role coverage for the current identity vs. a standard
+       high-privilege set used by ``Organization.add_user_as_owner``.
+
+    Notes
+    -----
+    - Read-only: does not mutate any resources.
+    - Role detection is based on direct user bindings; group-based grants may
+      not appear. Use IAM policy viewers to validate group grants.
+    """
+    c = console or Console()
+
+    # Identity
+    try:
+        email = get_email(credentials=credentials)
+    except Exception as e:
+        c.print(Panel.fit(f"[red]Failed to resolve identity from ADC:[/red] {e}", title="Identity"))
+        return
+
+    c.print(Panel.fit(f"[bold]Active identity:[/bold] {email}", title="Identity", border_style="cyan"))
+
+    # Quota project
+    try:
+        qp = quota_project(credentials=credentials)
+    except Exception:
+        msg = (
+            "Could not determine a quota project from ADC.\n\n"
+            "Set a quota project for Application Default Credentials:\n\n"
+            "    gcloud auth application-default set-quota-project <PROJECT_ID>\n\n"
+            "After setting, re-run doctor()."
+        )
+        c.print(Panel(msg, title="Quota Project", border_style="red"))
+        return
+
+    c.print(Panel.fit(f"[bold]Quota project:[/bold] {qp.id}", title="Quota Project", border_style="green"))
+
+    # Enabled APIs vs requirements
+    try:
+        enabled = set(qp.enabled_apis(credentials=credentials))
+    except Exception as e:
+        c.print(Panel.fit(f"[red]Failed to list enabled APIs:[/red] {e}", title="APIs"))
+        enabled = set()
+
+    required = set(_REQUIRED_APIS)
+    missing = sorted(required - enabled)
+    present = sorted(required & enabled)
+
+    apit = Table(title="APIs", show_lines=False)
+    apit.add_column("Status", style="bold")
+    apit.add_column("Service")
+    for svc in present:
+        apit.add_row("[green]OK[/green]", svc)
+    for svc in missing:
+        apit.add_row("[red]Missing[/red]", svc)
+    c.print(apit)
+
+    if missing:
+        c.print(
+            Panel(
+                "You can enable missing APIs on the quota project (requires permissions):\n"
+                + "\n".join(
+                    f"gcloud services enable {svc} --project {qp.id}" for svc in missing
+                ),
+                title="Enable Missing APIs",
+                border_style="yellow",
+            )
+        )
+
+    # Organization roles
+    try:
+        orgs = [o for o in list_organizations(credentials=credentials) if isinstance(o, Organization)]
+    except Exception as e:
+        c.print(Panel.fit(f"[red]Failed to list organizations:[/red] {e}", title="Organizations"))
+        orgs = []
+
+    if not orgs:
+        c.print(Panel.fit("No organizations visible to this identity.", title="Organizations"))
+        return
+
+    # Standard role set used by add_user_as_owner
+    required_roles = sorted(Organization.ORGANIZATION_OWNER_ROLES)
+
+    for org in orgs:
+        try:
+            roles = list_roles(org, user_email=email, credentials=credentials)
+            have = sorted(r.name for r in roles)
+        except Exception as e:
+            c.print(Panel.fit(f"[red]Failed to list roles on {org.resource_name}:[/red] {e}", title=org.display_name))
+            continue
+
+        have_set = set(have)
+        req_set = set(required_roles)
+        missing_roles = sorted(req_set - have_set)
+        present_roles = sorted(req_set & have_set)
+
+        t = Table(title=f"Org: {org.display_name} ({org.id})", show_lines=False)
+        t.add_column("Status", style="bold")
+        t.add_column("Role")
+        for r in present_roles:
+            t.add_row("[green]OK[/green]", r)
+        for r in missing_roles:
+            t.add_row("[red]Missing[/red]", r)
+        c.print(t)
+
+        if missing_roles:
+            commands = "\n".join(
+                f"gcloud organizations add-iam-policy-binding {org.id} --member=\"user:{email}\" --role=\"{r}\""
+                for r in missing_roles
+            )
+            c.print(
+                Panel(
+                    "Ask an Organization Admin to run the following commands to add this user as owner-level admin:\n\n"
+                    + commands,
+                    title="Grant Missing Roles",
+                    border_style="yellow",
+                )
+            )
