@@ -38,19 +38,21 @@ def _get_iam_policy(*, credentials: "Credentials", resource_name: str) -> dict:
     raise ValueError(f"Unsupported resource_name: {resource_name}")
 
 
-def _list_roles(*, credentials: "Credentials", resource_name: str) -> list[Role]:
-    """List IAM roles bound directly to the current user on a resource.
+def _list_roles(*, credentials: "Credentials", resource_name: str, user_email: str | None = None) -> list[Role]:
+    """List IAM roles bound directly to a user on a resource.
 
     This helper is intentionally decoupled from high-level objects. Callers pass
     in materialized `credentials` and the target `resource_name` (e.g.,
-    ``"projects/my-project"``, ``"folders/123"``, ``"organizations/456"``).
+    ``"projects/my-project"``, ``"folders/123"``, ``"organizations/456"``),
+    and optionally the target ``user_email``. If ``user_email`` is omitted,
+    the email is derived from the provided credentials (ADC).
     """
     from pdum.gcp._clients import iam_v1
     from pdum.gcp.admin import get_email
     from pdum.gcp.types import Role
 
     creds = credentials
-    email = get_email(credentials=creds)
+    email = user_email or get_email(credentials=creds)
 
     # Fetch IAM policy via shared helper
     policy = _get_iam_policy(credentials=creds, resource_name=resource_name)

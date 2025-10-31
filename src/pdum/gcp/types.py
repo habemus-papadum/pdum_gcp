@@ -167,18 +167,20 @@ class Container(Resource):
         """
         raise NotImplementedError("Subclasses must implement create_folder()")
 
-    def list_roles(self, *, credentials=None) -> list[Role]:
-        """List the IAM roles for the current user on this container.
+    def list_roles(self, *, credentials=None, user_email: str | None = None) -> list[Role]:
+        """List IAM roles for a user on this container.
 
         Args:
             credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+            user_email: If provided, list roles for this email; otherwise the
+                email associated with ADC/credentials is used.
 
         Returns:
             A list of Role objects.
         """
         creds = self._get_credentials(credentials=credentials)
         from pdum.gcp._helpers import _list_roles
-        return _list_roles(credentials=creds, resource_name=self.resource_name)
+        return _list_roles(credentials=creds, resource_name=self.resource_name, user_email=user_email)
 
     def create_project(
         self,
@@ -469,6 +471,19 @@ class Container(Resource):
 
 @dataclass
 class Organization(Container):
+    # High-privilege organization roles used by add_user_as_owner()
+    ORGANIZATION_OWNER_ROLES: tuple[str, ...] = (
+        "roles/billing.admin",
+        "roles/billing.costsManager",
+        "roles/billing.projectManager",
+        "roles/iam.securityAdmin",
+        "roles/orgpolicy.policyAdmin",
+        "roles/resourcemanager.folderAdmin",
+        "roles/resourcemanager.organizationAdmin",
+        "roles/resourcemanager.projectCreator",
+        "roles/resourcemanager.projectDeleter",
+        "roles/resourcemanager.projectIamAdmin",
+    )
     """Information about a GCP organization.
 
     Attributes:
@@ -619,6 +634,8 @@ class Organization(Container):
             _credentials=creds,
         )
 
+
+
     def add_user_roles(self, user_email: str, roles_to_add: list[str], *, credentials=None) -> dict:
         """Add a user to one or more IAM roles at the Organization level.
 
@@ -696,6 +713,36 @@ class Organization(Container):
             crm.organizations().setIamPolicy(resource=resource, body={"policy": policy}).execute()
         )
         return updated
+
+    def add_user_as_owner(self, user_email: str, *, credentials=None) -> dict:
+        """Grant a user a standard set of high-privilege org roles.
+
+        This is a convenience wrapper around ``add_user_roles`` that applies
+        a curated, sorted set of organization-level administrative roles,
+        including billing, IAM, org policy, folder admin, and project admin
+        capabilities.
+
+        Parameters
+        ----------
+        user_email : str
+            The user's email address to grant roles to.
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
+
+        Returns
+        -------
+        dict
+            The updated (or current, if no change) IAM policy as a dictionary.
+
+        Notes
+        -----
+        This mutates Organization IAM. Ensure appropriate privileges.
+        """
+        return self.add_user_roles(
+            user_email,
+            roles_to_add=list(self.ORGANIZATION_OWNER_ROLES),
+            credentials=credentials,
+        )
 
     def billing_accounts(self, *, credentials=None, open_only: bool = True) -> list[BillingAccount]:
         """List billing accounts scoped to this organization.
@@ -1356,18 +1403,20 @@ class Project(Resource):
 
         return name
 
-    def list_roles(self, *, credentials=None) -> list[Role]:
-        """List the IAM roles for the current user on this project.
+    def list_roles(self, *, credentials=None, user_email: str | None = None) -> list[Role]:
+        """List IAM roles for a user on this project.
 
         Args:
             credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+            user_email: If provided, list roles for this email; otherwise the
+                email associated with ADC/credentials is used.
 
         Returns:
             A list of Role objects.
         """
         creds = self._get_credentials(credentials=credentials)
         from pdum.gcp._helpers import _list_roles
-        return _list_roles(credentials=creds, resource_name=f"projects/{self.id}")
+        return _list_roles(credentials=creds, resource_name=f"projects/{self.id}", user_email=user_email)
 
     def add_user_as_owner(self, user_email: str, *, credentials=None) -> dict:
         """Add a user to the project's Owners (roles/owner) binding.

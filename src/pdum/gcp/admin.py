@@ -14,7 +14,8 @@ from google.auth.credentials import Credentials
 
 from pdum.gcp._clients import crm_v1
 from pdum.gcp._helpers import _get_iam_policy as _get_iam_policy_internal
-from pdum.gcp.types import APIResolutionError, Organization, Project, Resource
+from pdum.gcp._helpers import _list_roles as _list_roles_internal
+from pdum.gcp.types import APIResolutionError, Organization, Project, Resource, Role
 
 # Cache for API map to avoid repeated file I/O
 _API_MAP_CACHE: dict[str, str] | None = None
@@ -476,3 +477,32 @@ def get_iam_policy(resource: Resource, *, credentials: Optional[Credentials] = N
     """
     creds = resource._get_credentials(credentials=credentials)
     return _get_iam_policy_internal(credentials=creds, resource_name=resource.full_resource_name())
+
+
+def list_roles(
+    resource: Resource,
+    *,
+    user_email: Optional[str] = None,
+    credentials: Optional[Credentials] = None,
+) -> list[Role]:
+    """List IAM roles for a user on a Resource.
+
+    Parameters
+    ----------
+    resource : Resource
+        Any CRM resource implementing ``full_resource_name()`` (Organization, Folder, Project).
+    user_email : str, optional
+        If provided, list roles for this email. If omitted, uses the email
+        derived from the provided ADC/credentials.
+    credentials : Credentials, optional
+        Explicit credentials to use; if omitted, uses the resource's stored creds or ADC.
+
+    Returns
+    -------
+    list[Role]
+        Roles that directly bind the user on the resource.
+    """
+    creds = resource._get_credentials(credentials=credentials)
+    return _list_roles_internal(
+        credentials=creds, resource_name=resource.full_resource_name(), user_email=user_email
+    )
