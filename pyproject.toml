@@ -1,6 +1,6 @@
 [project]
 name = "habemus-papadum-gcp"
-version = "0.1.0-alpha"
+version = "0.1.0"
 description = "Utilities and tools for Google Cloud"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -33,7 +33,7 @@ dependencies = [
     "rich>=14.2.0",
 ]
 
- 
+
 
 [project.urls]
 Homepage = "https://github.com/habemus-papadum/gcp"
