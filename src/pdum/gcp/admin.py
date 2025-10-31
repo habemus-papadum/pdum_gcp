@@ -13,7 +13,8 @@ import google.auth.transport.requests
 from google.auth.credentials import Credentials
 
 from pdum.gcp._clients import crm_v1
-from pdum.gcp.types import APIResolutionError, Organization, Project
+from pdum.gcp._helpers import _get_iam_policy as _get_iam_policy_internal
+from pdum.gcp.types import APIResolutionError, Organization, Project, Resource
 
 # Cache for API map to avoid repeated file I/O
 _API_MAP_CACHE: dict[str, str] | None = None
@@ -457,3 +458,21 @@ def lookup_api(display_name: str) -> str:
         f"Please check the spelling or try a different name."
     )
 
+
+def get_iam_policy(resource: Resource, *, credentials: Optional[Credentials] = None) -> dict:
+    """Return the IAM policy for a Resource.
+
+    Parameters
+    ----------
+    resource : Resource
+        Any CRM resource implementing ``full_resource_name()`` (Organization, Folder, Project).
+    credentials : Credentials, optional
+        Explicit credentials to use; if omitted, uses the resource's stored creds or ADC.
+
+    Returns
+    -------
+    dict
+        The IAM policy for the resource.
+    """
+    creds = resource._get_credentials(credentials=credentials)
+    return _get_iam_policy_internal(credentials=creds, resource_name=resource.full_resource_name())

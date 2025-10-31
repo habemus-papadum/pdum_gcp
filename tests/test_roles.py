@@ -5,7 +5,7 @@ import os
 import pytest
 
 from pdum.gcp.admin import list_organizations, quota_project
-from pdum.gcp.types import Organization, Project, Folder
+from pdum.gcp.types import Organization
 
 # Skip these tests in CI unless PDUM_GCP_MANUAL_TESTS environment variable is set
 manual_test = pytest.mark.skipif(

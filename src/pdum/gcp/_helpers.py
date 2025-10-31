@@ -5,19 +5,55 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from pdum.gcp.types import Role, Container, Project
+    from google.auth.credentials import Credentials
 
-
-def _list_roles(resource: "Container | Project") -> list[Role]:
-    """Internal helper to list IAM roles for a resource."""
-    from pdum.gcp.admin import get_email
-    from pdum.gcp._clients import iam_v1
     from pdum.gcp.types import Role
 
-    creds = resource._get_credentials()
+
+def _get_iam_policy(*, credentials: "Credentials", resource_name: str) -> dict:
+    """Fetch the IAM policy for a resource using Cloud Resource Manager v3.
+
+    Parameters
+    ----------
+    credentials : Credentials
+        Materialized credentials to authenticate the request.
+    resource_name : str
+        Full resource name, e.g., ``projects/{id}``, ``folders/{id}``,
+        or ``organizations/{id}``.
+
+    Returns
+    -------
+    dict
+        The IAM policy for the resource.
+    """
+    from pdum.gcp._clients import crm_v3
+
+    crm = crm_v3(credentials)
+    if resource_name.startswith("projects/"):
+        return crm.projects().getIamPolicy(resource=resource_name, body={}).execute()
+    if resource_name.startswith("folders/"):
+        return crm.folders().getIamPolicy(resource=resource_name, body={}).execute()
+    if resource_name.startswith("organizations/"):
+        return crm.organizations().getIamPolicy(resource=resource_name, body={}).execute()
+    raise ValueError(f"Unsupported resource_name: {resource_name}")
+
+
+def _list_roles(*, credentials: "Credentials", resource_name: str) -> list[Role]:
+    """List IAM roles bound directly to the current user on a resource.
+
+    This helper is intentionally decoupled from high-level objects. Callers pass
+    in materialized `credentials` and the target `resource_name` (e.g.,
+    ``"projects/my-project"``, ``"folders/123"``, ``"organizations/456"``).
+    """
+    from pdum.gcp._clients import iam_v1
+    from pdum.gcp.admin import get_email
+    from pdum.gcp.types import Role
+
+    creds = credentials
     email = get_email(credentials=creds)
 
-    policy = resource.get_iam_policy(credentials=creds)
+    # Fetch IAM policy via shared helper
+    policy = _get_iam_policy(credentials=creds, resource_name=resource_name)
     user_roles = []
     for binding in policy.get("bindings", []):
         if f"user:{email}" in binding.get("members", []):

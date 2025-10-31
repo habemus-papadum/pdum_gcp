@@ -6,13 +6,14 @@ like organizations, folders, and projects.
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Generator, Optional
 
 import google.auth
 from google.auth.credentials import Credentials
 
-from pdum.gcp._clients import cloud_billing, crm_v1, crm_v3, iam_v1, service_usage
+from pdum.gcp._clients import cloud_billing, crm_v1, crm_v3, service_usage
 
 if TYPE_CHECKING:
     pass
@@ -46,18 +47,49 @@ class BillingAccount:
     Attributes:
         id: The billing account ID (e.g., "012345-567890-ABCDEF")
         display_name: The human-readable display name for the billing account
+        status: Status string, e.g., "OPEN" or "CLOSED" (default: "OPEN")
     """
 
     id: str
     display_name: str
+    status: str = "OPEN"
 
     def __bool__(self) -> bool:
-        """Return True for regular billing accounts."""
+        """Return True for regular billing accounts.
+
+        Note
+        ----
+        Truthiness does not reflect the `status` field; even a CLOSED account
+        is truthy. Use `status` to inspect openness if needed.
+        """
         return True
 
 
+class Resource(ABC):
+    """Abstract base for CRM-addressable resources.
+
+    Provides uniform access to the fully-qualified resource name and shared
+    credential materialization logic.
+    """
+
+    _credentials: Optional[Credentials]
+
+    @abstractmethod
+    def full_resource_name(self) -> str:
+        """Return the fully qualified resource name (projects/{id}, folders/{id}, organizations/{id})."""
+
+    def _get_credentials(self, *, credentials: Optional[Credentials] = None) -> Credentials:
+        """Get credentials for API calls (explicit > stored > ADC)."""
+        if credentials is not None:
+            return credentials
+        if getattr(self, "_credentials", None) is not None:
+            return self._credentials  # type: ignore[attr-defined]
+        creds, _ = google.auth.default()
+        return creds
+
+
 @dataclass
-class Container:
+class Container(Resource):
     """Base class for GCP resource containers (Organizations, Folders, and NO_ORG).
 
     This base class provides common functionality for all container types that can
@@ -75,21 +107,8 @@ class Container:
     display_name: str
     _credentials: Optional[Credentials] = field(default=None, repr=False, compare=False)
 
-    def _get_credentials(self, *, credentials: Optional[Credentials] = None) -> Credentials:
-        """Get credentials for API calls.
-
-        Args:
-            credentials: Explicit credentials to use
-
-        Returns:
-            Credentials in order of preference: explicit > stored > ADC
-        """
-        if credentials is not None:
-            return credentials
-        if self._credentials is not None:
-            return self._credentials
-        creds, _ = google.auth.default()
-        return creds
+    def full_resource_name(self) -> str:
+        return self.resource_name
 
     def parent(self, *, credentials=None) -> Optional[Container]:
         """Get the parent container.
@@ -148,20 +167,6 @@ class Container:
         """
         raise NotImplementedError("Subclasses must implement create_folder()")
 
-    def get_iam_policy(self, *, credentials=None) -> dict:
-        """Get the IAM policy for this folder.
-
-        Args:
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
-
-        Returns:
-            The IAM policy for the folder.
-        """
-        creds = self._get_credentials(credentials=credentials)
-        crm_service = crm_v3(creds)
-        policy = crm_service.folders().getIamPolicy(resource=self.resource_name, body={}).execute()
-        return policy
-
     def list_roles(self, *, credentials=None) -> list[Role]:
         """List the IAM roles for the current user on this container.
 
@@ -171,8 +176,107 @@ class Container:
         Returns:
             A list of Role objects.
         """
+        creds = self._get_credentials(credentials=credentials)
         from pdum.gcp._helpers import _list_roles
-        return _list_roles(self)
+        return _list_roles(credentials=creds, resource_name=self.resource_name)
+
+    def create_project(
+        self,
+        project_id: str,
+        display_name: str,
+        *,
+        billing_account: "BillingAccount" = None,  # default set below for typing clarity
+        credentials=None,
+        timeout: float = 600.0,
+        polling_interval: float = 5.0,
+    ) -> "Project":
+        """Create a new project under this container and optionally attach billing.
+
+        Parameters
+        ----------
+        project_id : str
+            The new project's ID (must satisfy GCP constraints).
+        display_name : str
+            Human-friendly display name for the project.
+        billing_account : BillingAccount, optional
+            Billing account to attach after creation. If omitted or falsy (e.g.,
+            ``NO_BILLING_ACCOUNT``), billing is not attached.
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
+        timeout : float, default 600.0
+            Max seconds to wait for the long-running create operation.
+        polling_interval : float, default 5.0
+            Seconds between operation polls.
+
+        Returns
+        -------
+        Project
+            The created project materialized as a Project instance.
+
+        Raises
+        ------
+        googleapiclient.errors.HttpError
+            If any API call fails.
+        TimeoutError
+            If creation does not complete within ``timeout`` seconds.
+        RuntimeError
+            If the create operation completes with an error.
+
+        Notes
+        -----
+        This method mutates GCP estate (creates resources, may attach billing).
+        Do not run in CI. Prefer invoking manually with appropriate credentials.
+        """
+        # Avoid circular import for sentinel
+        from pdum.gcp.types import NO_BILLING_ACCOUNT as _NO_BILLING_ACCOUNT
+
+        # Default billing account sentinel
+        if billing_account is None:
+            billing_account = _NO_BILLING_ACCOUNT
+
+        creds = self._get_credentials(credentials=credentials)
+        crm = crm_v3(creds)
+
+        body = {
+            "projectId": project_id,
+            "displayName": display_name,
+        }
+
+        # Parent: use container resource name unless creating without an org/folder
+        is_no_org = (self is NO_ORG) or (getattr(self, "resource_name", "") == "NO_ORG")
+        parent_name = None if is_no_org else self.resource_name
+        if parent_name:
+            body["parent"] = parent_name
+
+        # Initiate creation (LRO)
+        operation = crm.projects().create(body=body).execute()
+
+        # Poll until done or timeout
+        import time
+
+        op_name = operation.get("name")
+        start = time.time()
+        while not operation.get("done", False):
+            if time.time() - start > timeout:
+                raise TimeoutError(f"Project create operation timed out after {timeout}s (operation: {op_name})")
+            time.sleep(polling_interval)
+            operation = crm.operations().get(name=op_name).execute()
+
+        if "error" in operation:
+            err = operation["error"]
+            raise RuntimeError(f"Project creation failed: {err.get('code')}: {err.get('message')}")
+
+        # Attach billing if a real account provided
+        if billing_account:
+            billing = cloud_billing(creds)
+            billing_body = {
+                "billingAccountName": f"billingAccounts/{billing_account.id}",
+                "billingEnabled": True,
+            }
+            billing.projects().updateBillingInfo(name=f"projects/{project_id}", body=billing_body).execute()
+
+        # Return a fully materialized Project
+        return Project.lookup(project_id, credentials=creds)
     def walk_projects(
         self, *, credentials=None, active_only: bool = True
     ) -> Generator[Project, None, None]:
@@ -515,13 +619,94 @@ class Organization(Container):
             _credentials=creds,
         )
 
-    def billing_accounts(self, *, credentials=None) -> list[BillingAccount]:
+    def add_user_roles(self, user_email: str, roles_to_add: list[str], *, credentials=None) -> dict:
+        """Add a user to one or more IAM roles at the Organization level.
+
+        This updates the Organization's IAM policy by ensuring ``user:{email}``
+        is present in each specified role binding. If a binding does not exist,
+        it is created; if the member already exists for a role, that role is
+        left unchanged.
+
+        Parameters
+        ----------
+        user_email : str
+            The user's email address (e.g., ``"admin@example.com"``). The
+            ``user:`` prefix is added automatically.
+        roles_to_add : list[str]
+            A list of role names (for example: ``"roles/billing.admin"``,
+            ``"roles/iam.securityAdmin"``, ``"roles/resourcemanager.organizationAdmin"``).
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
+
+        Returns
+        -------
+        dict
+            The updated (or current, if no change) IAM policy as a dictionary.
+
+        Raises
+        ------
+        ValueError
+            If the email appears invalid or ``roles_to_add`` is empty.
+        googleapiclient.errors.HttpError
+            If the get/set policy API calls fail.
+
+        Notes
+        -----
+        This method mutates Organization-level IAM policy. Ensure you have
+        ``resourcemanager.organizations.setIamPolicy`` on the target org.
+        Not executed in CI.
+        """
+        if "@" not in user_email or not user_email.strip():
+            raise ValueError("user_email must be a valid email address")
+        if not roles_to_add:
+            raise ValueError("roles_to_add must be a non-empty list of role names")
+
+        member = f"user:{user_email.strip()}"
+        creds = self._get_credentials(credentials=credentials)
+        crm = crm_v3(creds)
+        resource = self.resource_name
+
+        policy = (
+            crm.organizations()
+            .getIamPolicy(resource=resource, body={"options": {"requestedPolicyVersion": 3}})
+            .execute()
+        )
+
+        if policy.get("version", 0) < 3:
+            policy["version"] = 3
+
+        bindings = policy.setdefault("bindings", [])
+        changes_made = False
+
+        for role in roles_to_add:
+            binding = next((b for b in bindings if b.get("role") == role), None)
+            if binding is None:
+                bindings.append({"role": role, "members": [member]})
+                changes_made = True
+            else:
+                members = binding.setdefault("members", [])
+                if member not in members:
+                    members.append(member)
+                    changes_made = True
+
+        if not changes_made:
+            return policy
+
+        updated = (
+            crm.organizations().setIamPolicy(resource=resource, body={"policy": policy}).execute()
+        )
+        return updated
+
+    def billing_accounts(self, *, credentials=None, open_only: bool = True) -> list[BillingAccount]:
         """List billing accounts scoped to this organization.
 
         Parameters
         ----------
         credentials : Credentials, optional
             Explicit credentials to use. If ``None``, uses stored credentials or ADC.
+        open_only : bool, optional
+            If ``True`` (default), return only billing accounts whose status is
+            open. If ``False``, include closed accounts as well.
 
         Returns
         -------
@@ -558,9 +743,15 @@ class Organization(Container):
                 # Format is "billingAccounts/012345-567890-ABCDEF"
                 billing_account_id = account["name"].split("/")[1]
                 display_name = account.get("displayName", billing_account_id)
+                is_open = account.get("open", False)
+                status = "OPEN" if is_open else "CLOSED"
+
+                # Respect open_only filter
+                if open_only and not is_open:
+                    continue
 
                 billing_accounts.append(
-                    BillingAccount(id=billing_account_id, display_name=display_name)
+                    BillingAccount(id=billing_account_id, display_name=display_name, status=status)
                 )
 
             # Get next page
@@ -569,20 +760,6 @@ class Organization(Container):
             )
 
         return billing_accounts
-
-    def get_iam_policy(self, *, credentials=None) -> dict:
-        """Get the IAM policy for this organization.
-
-        Args:
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
-
-        Returns:
-            The IAM policy for the organization.
-        """
-        creds = self._get_credentials(credentials=credentials)
-        crm_service = crm_v3(creds)
-        policy = crm_service.organizations().getIamPolicy(resource=self.resource_name, body={}).execute()
-        return policy
 
     @classmethod
     def lookup(cls, org_id: str, *, credentials: Optional[Credentials] = None) -> "Organization":
@@ -801,7 +978,7 @@ class Folder(Container):
 
 
 @dataclass
-class Project:
+class Project(Resource):
     """Information about a GCP project.
 
     Attributes:
@@ -820,21 +997,8 @@ class Project:
     parent: Container
     _credentials: Optional[Credentials] = field(default=None, repr=False, compare=False)
 
-    def _get_credentials(self, *, credentials: Optional[Credentials] = None) -> Credentials:
-        """Get credentials for API calls.
-
-        Args:
-            credentials: Explicit credentials to use
-
-        Returns:
-            Credentials in order of preference: explicit > stored > ADC
-        """
-        if credentials is not None:
-            return credentials
-        if self._credentials is not None:
-            return self._credentials
-        creds, _ = google.auth.default()
-        return creds
+    def full_resource_name(self) -> str:
+        return f"projects/{self.id}"
 
     def enabled_apis(self, *, credentials=None) -> list[str]:
         """List enabled APIs for this project.
@@ -1049,8 +1213,10 @@ class Project:
         )
 
         display_name = billing_account_info.get("displayName", billing_account_id)
+        is_open = billing_account_info.get("open", False)
+        status = "OPEN" if is_open else "CLOSED"
 
-        return BillingAccount(id=billing_account_id, display_name=display_name)
+        return BillingAccount(id=billing_account_id, display_name=display_name, status=status)
 
     @classmethod
     def lookup(cls, project_id: str, *, credentials: Optional[Credentials] = None) -> "Project":
@@ -1190,20 +1356,6 @@ class Project:
 
         return name
 
-    def get_iam_policy(self, *, credentials=None) -> dict:
-        """Get the IAM policy for this project.
-
-        Args:
-            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
-
-        Returns:
-            The IAM policy for the project.
-        """
-        creds = self._get_credentials(credentials=credentials)
-        crm_service = crm_v3(creds)
-        policy = crm_service.projects().getIamPolicy(resource=f"projects/{self.id}", body={}).execute()
-        return policy
-
     def list_roles(self, *, credentials=None) -> list[Role]:
         """List the IAM roles for the current user on this project.
 
@@ -1213,8 +1365,81 @@ class Project:
         Returns:
             A list of Role objects.
         """
+        creds = self._get_credentials(credentials=credentials)
         from pdum.gcp._helpers import _list_roles
-        return _list_roles(self)
+        return _list_roles(credentials=creds, resource_name=f"projects/{self.id}")
+
+    def add_user_as_owner(self, user_email: str, *, credentials=None) -> dict:
+        """Add a user to the project's Owners (roles/owner) binding.
+
+        This updates the project's IAM policy by adding ``user:{email}`` to the
+        ``roles/owner`` binding. If the user is already present, returns the
+        current policy unchanged.
+
+        Parameters
+        ----------
+        user_email : str
+            The user's email address (e.g., ``"user@example.com"``). The
+            ``user:`` prefix is added automatically.
+        credentials : Credentials, optional
+            Explicit credentials to use. If ``None``, uses stored credentials or ADC.
+
+        Returns
+        -------
+        dict
+            The updated (or current, if no change) IAM policy as a dictionary.
+
+        Raises
+        ------
+        ValueError
+            If ``user_email`` does not appear to be a valid email address.
+        googleapiclient.errors.HttpError
+            If the get/set policy API calls fail.
+
+        Notes
+        -----
+        This method mutates GCP IAM policy on the project. Ensure you have the
+        necessary permissions (e.g., Project IAM Admin/Owner). Not executed in CI.
+        """
+        if "@" not in user_email or not user_email.strip():
+            raise ValueError("user_email must be a valid email address")
+
+        member = f"user:{user_email.strip()}"
+        role = "roles/owner"
+
+        creds = self._get_credentials(credentials=credentials)
+        crm = crm_v3(creds)
+        resource = f"projects/{self.id}"
+
+        # Request policy with version 3 to support conditions if present
+        policy = (
+            crm.projects()
+            .getIamPolicy(resource=resource, body={"options": {"requestedPolicyVersion": 3}})
+            .execute()
+        )
+
+        # Ensure version >= 3
+        if policy.get("version", 0) < 3:
+            policy["version"] = 3
+
+        # Locate or create the owners binding
+        bindings = policy.setdefault("bindings", [])
+        owner_binding = next((b for b in bindings if b.get("role") == role), None)
+
+        if owner_binding is None:
+            owner_binding = {"role": role, "members": [member]}
+            bindings.append(owner_binding)
+        else:
+            members = owner_binding.setdefault("members", [])
+            if member in members:
+                return policy  # already present, no change
+            members.append(member)
+
+        # Set the modified policy
+        updated = (
+            crm.projects().setIamPolicy(resource=resource, body={"policy": policy}).execute()
+        )
+        return updated
 
 def _project_from_api_response(
     project_dict: dict, parent: Container, credentials: Optional[Credentials] = None
@@ -1400,7 +1625,7 @@ class _NoOrgSentinel(Container):
         """
         return self.projects(credentials=credentials)
 
-    def billing_accounts(self, *, credentials=None) -> list[BillingAccount]:
+    def billing_accounts(self, *, credentials=None, open_only: bool = True) -> list[BillingAccount]:
         """List all billing accounts visible to the user.
 
         For NO_ORG (projects without an organization), this returns all billing accounts
@@ -1412,6 +1637,7 @@ class _NoOrgSentinel(Container):
 
         Args:
             credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+            open_only: If True (default), include only open accounts.
 
         Returns:
             List of all BillingAccount objects visible to the user
@@ -1446,10 +1672,13 @@ class _NoOrgSentinel(Container):
                 # Format is "billingAccounts/012345-567890-ABCDEF"
                 billing_account_id = account["name"].split("/")[1]
                 display_name = account.get("displayName", billing_account_id)
+                is_open = account.get("open", False)
+                status = "OPEN" if is_open else "CLOSED"
 
-                billing_accounts.append(
-                    BillingAccount(id=billing_account_id, display_name=display_name)
-                )
+                if not open_only or is_open:
+                    billing_accounts.append(
+                        BillingAccount(id=billing_account_id, display_name=display_name, status=status)
+                    )
 
             # Get next page
             request = billing_service.billingAccounts().list_next(
@@ -1484,6 +1713,7 @@ class _NoBillingAccountSentinel(BillingAccount):
             # Manually set the BillingAccount fields
             instance.id = ""
             instance.display_name = "No Billing Account"
+            instance.status = ""
             cls._instance = instance
         return cls._instance
 

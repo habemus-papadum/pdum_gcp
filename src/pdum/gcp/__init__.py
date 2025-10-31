@@ -2,6 +2,7 @@
 
 from pdum.gcp.admin import (
     get_email,
+    get_iam_policy,
     list_organizations,
     lookup_api,
     quota_project,
@@ -24,6 +25,7 @@ __version__ = "0.1.0-alpha"
 __all__ = [
     "__version__",
     "get_email",
+    "get_iam_policy",
     "list_organizations",
     "lookup_api",
     "quota_project",
@@ -37,5 +39,4 @@ __all__ = [
     "NO_ORG",
     "NO_BILLING_ACCOUNT",
 ]
-
 

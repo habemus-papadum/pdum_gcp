@@ -5,3 +5,4 @@
 # Except for demo notebooks you want to commit
 !*-demo.ipynb
 !*-example.ipynb
+!*_demo.ipynb
