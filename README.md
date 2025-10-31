@@ -8,6 +8,27 @@
 
 GCP utils
 
+## What This Project Is
+
+`pdum_gcp` is a toolbox for seasoned administrators who need to nurture Google Cloud estates that sprawl across multiple organizations. Think of the kind of tasks you might script in Terraform, except you want an interactive, incremental workflow that lets one trusted human explore, prototype, and tidy up quickly. This library intentionally does **not** scale beyond a tiny circle of grizzled operators—ideally a team of one—because it assumes every participating identity has god-like access across those organizations.
+
+The focus here is admin hygiene: inspecting estates, checking IAM, enabling required APIs, and wiring up billing or quota projects. Once the scaffolding exists, you drop back into the regular Google Cloud Python clients to actually use the resources. A core tenet is “bring your own identity”: everything runs under your Application Default Credentials, which belong to you, not the orgs you help. That makes this powerful, but also dangerous—misplaced trust, compromised credentials, or sloppy copy/paste can translate into real financial and operational damage.
+
+Use this library only if you:
+- Operate in small, high-trust environments where rapid create/tear-down cycles matter.
+- Regularly hop between organizations or short-lived projects.
+- Understand that you are working with loaded weapons and accept the risk.
+
+### Feature Highlights
+
+- Pre-flight your environment with `doctor()` to confirm identity, quota project, and API readiness.
+- Explore estates with `list_organizations()`, `walk_projects()`, and container helpers.
+- Resolve quota projects and billing details with `quota_project()` and billing sentinels.
+- Inspect IAM with `get_iam_policy()` and `list_roles()` before making changes.
+- Map friendly API names to service IDs via `lookup_api()` and the bundled catalog.
+
+🧭 Ready to see it in action? Follow the [Interactive Admin Tutorial](tutorial.md) for a guided, output-rich walkthrough (with sensitive identifiers anonymized).
+
 
 ## Development
 

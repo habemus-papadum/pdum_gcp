@@ -12,6 +12,8 @@ theme:
 
 nav:
   - Home: index.md
+  - Tutorial: tutorial.md
+  - Tutorial Rebuild Guide: tutorial_rebuild.md
   - API: reference.md
 
 # If you'd like to specify a separate docs directory, you can do so here
