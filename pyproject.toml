@@ -19,6 +19,8 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "coolname>=2.2.0",
+    "google-api-python-client>=2.186.0",
     "google-auth>=2.42.1",
     "google-cloud>=0.34.0",
     "google-cloud-billing>=1.17.0",

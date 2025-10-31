@@ -105,6 +105,52 @@ uv run ruff check --fix .
 - Tests run with `-s` flag (no capture) by default
 - Coverage reporting: use `--cov=src/pdum/gcp --cov-report=xml --cov-report=term`
 
+#### Manual Tests (Skipped in CI)
+Some tests require real GCP credentials or interact with live APIs. These tests are useful for development but should not run in CI:
+
+**Creating Manual Tests:**
+```python
+import os
+import pytest
+
+# Define a decorator for manual tests
+manual_test = pytest.mark.skipif(
+    not os.getenv("PDUM_GCP_MANUAL_TESTS"),
+    reason="Manual test - requires GCP credentials. Set PDUM_GCP_MANUAL_TESTS=1 to run.",
+)
+
+@manual_test
+def test_something_requiring_gcp():
+    """This test will be skipped in CI."""
+    # Test code that requires real GCP access
+    pass
+```
+
+**Running Manual Tests Locally:**
+```bash
+# Run all manual tests
+PDUM_GCP_MANUAL_TESTS=1 uv run pytest tests/ -v
+
+# Run specific manual test file
+PDUM_GCP_MANUAL_TESTS=1 uv run pytest tests/test_admin.py -v
+
+# Run specific manual test function
+PDUM_GCP_MANUAL_TESTS=1 uv run pytest tests/test_admin.py::test_get_adc_email -v
+```
+
+**When to Use Manual Tests:**
+- Tests that require Application Default Credentials (ADC)
+- Tests that interact with real GCP APIs (Cloud Resource Manager, IAM, etc.)
+- Tests that might incur costs or require specific GCP project setup
+- Integration tests that verify end-to-end functionality with real resources
+
+**Guidelines for Manual Tests:**
+- Always add clear docstrings explaining what the test does
+- Document any required GCP permissions or setup
+- Include helpful print statements showing test progress/results
+- Keep manual tests separate from unit tests that can run in CI
+- Consider adding corresponding unit tests that mock GCP APIs for CI coverage
+
 ### Testing Configuration
 The pytest configuration is in `pyproject.toml`:
 ```toml
