@@ -456,3 +456,4 @@ def lookup_api(display_name: str) -> str:
         f"No direct match or close fuzzy match found for API '{display_name}'. "
         f"Please check the spelling or try a different name."
     )
+

@@ -21,6 +21,11 @@ def crm_v3(credentials: Credentials):
     return discovery.build("cloudresourcemanager", "v3", credentials=credentials, cache_discovery=False)
 
 
+def iam_v1(credentials: Credentials):
+    """IAM v1 service client."""
+    return discovery.build("iam", "v1", credentials=credentials, cache_discovery=False)
+
+
 def service_usage(credentials: Credentials):
     """Service Usage v1 service client."""
     return discovery.build("serviceusage", "v1", credentials=credentials, cache_discovery=False)

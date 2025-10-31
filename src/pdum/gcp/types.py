@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Generator, Optional
 import google.auth
 from google.auth.credentials import Credentials
 
-from pdum.gcp._clients import cloud_billing, crm_v1, crm_v3, service_usage
+from pdum.gcp._clients import cloud_billing, crm_v1, crm_v3, iam_v1, service_usage
 
 if TYPE_CHECKING:
     pass
@@ -148,6 +148,31 @@ class Container:
         """
         raise NotImplementedError("Subclasses must implement create_folder()")
 
+    def get_iam_policy(self, *, credentials=None) -> dict:
+        """Get the IAM policy for this folder.
+
+        Args:
+            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+
+        Returns:
+            The IAM policy for the folder.
+        """
+        creds = self._get_credentials(credentials=credentials)
+        crm_service = crm_v3(creds)
+        policy = crm_service.folders().getIamPolicy(resource=self.resource_name, body={}).execute()
+        return policy
+
+    def list_roles(self, *, credentials=None) -> list[Role]:
+        """List the IAM roles for the current user on this container.
+
+        Args:
+            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+
+        Returns:
+            A list of Role objects.
+        """
+        from pdum.gcp._helpers import _list_roles
+        return _list_roles(self)
     def walk_projects(
         self, *, credentials=None, active_only: bool = True
     ) -> Generator[Project, None, None]:
@@ -544,6 +569,20 @@ class Organization(Container):
             )
 
         return billing_accounts
+
+    def get_iam_policy(self, *, credentials=None) -> dict:
+        """Get the IAM policy for this organization.
+
+        Args:
+            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+
+        Returns:
+            The IAM policy for the organization.
+        """
+        creds = self._get_credentials(credentials=credentials)
+        crm_service = crm_v3(creds)
+        policy = crm_service.organizations().getIamPolicy(resource=self.resource_name, body={}).execute()
+        return policy
 
     @classmethod
     def lookup(cls, org_id: str, *, credentials: Optional[Credentials] = None) -> "Organization":
@@ -1151,6 +1190,31 @@ class Project:
 
         return name
 
+    def get_iam_policy(self, *, credentials=None) -> dict:
+        """Get the IAM policy for this project.
+
+        Args:
+            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+
+        Returns:
+            The IAM policy for the project.
+        """
+        creds = self._get_credentials(credentials=credentials)
+        crm_service = crm_v3(creds)
+        policy = crm_service.projects().getIamPolicy(resource=f"projects/{self.id}", body={}).execute()
+        return policy
+
+    def list_roles(self, *, credentials=None) -> list[Role]:
+        """List the IAM roles for the current user on this project.
+
+        Args:
+            credentials: Google Cloud credentials to use. If None, uses stored credentials or ADC.
+
+        Returns:
+            A list of Role objects.
+        """
+        from pdum.gcp._helpers import _list_roles
+        return _list_roles(self)
 
 def _project_from_api_response(
     project_dict: dict, parent: Container, credentials: Optional[Credentials] = None
