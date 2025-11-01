@@ -306,14 +306,20 @@ class Project(Resource):
 
         return _list_roles(credentials=creds, resource_name=f"projects/{self.id}", user_email=user_email)
 
-    def add_user_as_owner(self, user_email: str, *, credentials: Optional[Credentials] = None) -> dict:
-        """Add a user to the project's Owners (roles/owner) binding."""
+    def give_user_role(
+        self,
+        role: str,
+        user_email: str,
+        *,
+        credentials: Optional[Credentials] = None,
+        verbose: bool = True,
+    ) -> dict:
+        """Grant an IAM role to a user on this project."""
+
         if "@" not in user_email or not user_email.strip():
             raise ValueError("user_email must be a valid email address")
 
         member = f"user:{user_email.strip()}"
-        role = "roles/owner"
-
         creds = self._get_credentials(credentials=credentials)
         crm = crm_v3(creds)
         resource = f"projects/{self.id}"
@@ -326,19 +332,33 @@ class Project(Resource):
             policy["version"] = 3
 
         bindings = policy.setdefault("bindings", [])
-        owner_binding = next((b for b in bindings if b.get("role") == role), None)
+        binding = next((b for b in bindings if b.get("role") == role), None)
 
-        if owner_binding is None:
-            owner_binding = {"role": role, "members": [member]}
-            bindings.append(owner_binding)
+        if binding is None:
+            if verbose:
+                print(f"Role '{role}' not present; creating binding and adding {member}.")
+            bindings.append({"role": role, "members": [member]})
         else:
-            members = owner_binding.setdefault("members", [])
+            members = binding.setdefault("members", [])
             if member in members:
+                if verbose:
+                    print(f"{member} already has role '{role}'; no changes made.")
                 return policy
+            if verbose:
+                print(f"Adding {member} to existing role '{role}' binding.")
             members.append(member)
 
+        if verbose:
+            print(f"Updating IAM policy for role '{role}'.")
         updated = crm.projects().setIamPolicy(resource=resource, body={"policy": policy}).execute()
         return updated
+
+    def add_user_as_owner(self, user_email: str, *, credentials: Optional[Credentials] = None) -> list[dict]:
+        """Add a user to the project's Owners (roles/owner) binding."""
+        res = []
+        res.append(self.give_user_role("roles/owner", user_email, credentials=credentials))
+        res.append(self.give_user_role("roles/datastore.owner", user_email, credentials=credentials))
+        return res
 
     def create_firestore_db(
         self,
