@@ -2,14 +2,24 @@
 
 [Full report](https://htmlpreview.github.io/?https://github.com/habemus-papadum/pdum_gcp/blob/python-coverage-comment-action-data/htmlcov/index.html)
 
-| Name                         |    Stmts |     Miss |   Cover |   Missing |
-|----------------------------- | -------: | -------: | ------: | --------: |
-| src/pdum/gcp/\_\_init\_\_.py |        4 |        0 |    100% |           |
-| src/pdum/gcp/\_clients.py    |       13 |        5 |     62% |16, 21, 26, 31, 36 |
-| src/pdum/gcp/\_helpers.py    |       42 |       38 |     10% |29-38, 50-99 |
-| src/pdum/gcp/admin.py        |      202 |      142 |     30% |62-96, 117-145, 178-219, 257-270, 303-311, 342, 417, 435-437, 450, 454, 481-482, 508-509, 527-624 |
-| src/pdum/gcp/types.py        |      530 |      372 |     30% |102-105, 133, 153, 173, 193, 215, 232-235, 285-354, 387-398, 426-440, 452-478, 519-547, 592, 607-629, 644-659, 681-707, 752-789, 815, 848-879, 903-914, 955-975, 990-1012, 1027-1042, 1064-1090, 1127, 1153-1178, 1220-1276, 1305-1332, 1366-1375, 1405-1419, 1429-1437, 1465-1507, 1591-1594, 1628-1662, 1684, 1844-1865, 1878, 1914-1945 |
-|                    **TOTAL** |  **791** |  **557** | **30%** |           |
+| Name                                   |    Stmts |     Miss |   Cover |   Missing |
+|--------------------------------------- | -------: | -------: | ------: | --------: |
+| src/pdum/gcp/\_\_init\_\_.py           |        4 |        0 |    100% |           |
+| src/pdum/gcp/\_clients.py              |       13 |        5 |     62% |16, 21, 26, 31, 36 |
+| src/pdum/gcp/\_helpers.py              |       42 |       38 |     10% |29-38, 50-99 |
+| src/pdum/gcp/admin.py                  |      202 |      142 |     30% |62-96, 117-145, 178-219, 257-270, 303-311, 342, 417, 435-437, 450, 454, 481-482, 508-509, 527-624 |
+| src/pdum/gcp/types/\_\_init\_\_.py     |       12 |        0 |    100% |           |
+| src/pdum/gcp/types/billing\_account.py |       24 |        0 |    100% |           |
+| src/pdum/gcp/types/constants.py        |        3 |        0 |    100% |           |
+| src/pdum/gcp/types/container.py        |      123 |       92 |     25% |47, 67, 87, 107, 129, 151-152, 201-264, 286-294, 298-310, 314-336, 363, 374-389 |
+| src/pdum/gcp/types/exceptions.py       |        4 |        0 |    100% |           |
+| src/pdum/gcp/types/folder.py           |       57 |       44 |     23% |24-46, 50-71, 75-90, 94-110 |
+| src/pdum/gcp/types/no\_org.py          |       61 |       30 |     51% |66-85, 89, 93-115 |
+| src/pdum/gcp/types/organization.py     |      105 |       85 |     19% |40, 44-67, 71-86, 90-111, 127-164, 168, 181-205, 210-217 |
+| src/pdum/gcp/types/project.py          |      177 |      127 |     28% |35, 39-56, 68-108, 112-131, 143-152, 167-180, 191-199, 204-240, 283-286, 290-320, 325-327, 336 |
+| src/pdum/gcp/types/resource.py         |       17 |        4 |     76% |     25-28 |
+| src/pdum/gcp/types/role.py             |        8 |        0 |    100% |           |
+|                              **TOTAL** |  **852** |  **567** | **33%** |           |
 
 
 ## Setup coverage badge
