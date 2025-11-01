@@ -25,6 +25,7 @@ dependencies = [
     "google-auth>=2.42.1",
     "google-cloud>=0.34.0",
     "google-cloud-billing>=1.17.0",
+    "google-cloud-firestore>=2.21.0",
     "google-cloud-iam>=2.15.0",
     "google-cloud-resource-manager>=1.12.0",
     "google-cloud-service-usage>=1.9.0",

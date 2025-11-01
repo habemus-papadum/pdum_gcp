@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Iterable, Optional
+from typing import TYPE_CHECKING, Iterable, Optional, Union
 
 import coolname
+import google.api_core.operation
 import google.auth
 from google.auth.credentials import Credentials
+from google.cloud.firestore_admin_v1.types import database as gfa_database
 
-from pdum.gcp._clients import cloud_billing, crm_v3, service_usage
+from pdum.gcp._clients import cloud_billing, crm_v3, firestore_admin, service_usage
+from pdum.gcp.types.region import MultiRegion, Region
 
 from .billing_account import NO_BILLING_ACCOUNT, BillingAccount
 from .constants import _REQUIRED_APIS
@@ -318,6 +321,38 @@ class Project(Resource):
 
         updated = crm.projects().setIamPolicy(resource=resource, body={"policy": policy}).execute()
         return updated
+
+    def create_firestore_db(
+        self,
+        database_id: str,
+        *,
+        region: Union[Region, MultiRegion],
+        credentials: Optional[Credentials] = None,
+        concurrency_mode=gfa_database.Database.ConcurrencyMode.OPTIMISTIC,
+        edition=gfa_database.Database.DatabaseEdition.STANDARD,
+    ) -> google.api_core.operation.Operation:
+        creds = self._get_credentials(credentials=credentials)
+        client = firestore_admin(creds)
+
+        if isinstance(region, Region):
+            location_id = region.region_id
+        elif isinstance(region, MultiRegion):
+            location_id = region.multi_region_id
+        else:  # pragma: no cover - defensive
+            raise TypeError("region must be an instance of Region or MultiRegion")
+
+        project_resource = self.full_resource_name()
+
+        new_db_object = gfa_database.Database(
+            type_=gfa_database.Database.DatabaseType.FIRESTORE_NATIVE,
+            location_id=location_id,
+            concurrency_mode=concurrency_mode,
+            database_edition=edition,
+        )
+
+        operation = client.create_database(parent=project_resource, database=new_db_object, database_id=database_id)
+
+        return operation
 
     @staticmethod
     def _dummy_parent() -> "Container":

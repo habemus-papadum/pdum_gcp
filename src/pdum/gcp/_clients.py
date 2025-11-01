@@ -8,6 +8,7 @@ public API surface remains in `admin.py` and `types.py`.
 from __future__ import annotations
 
 from google.auth.credentials import Credentials
+from google.cloud import firestore_admin_v1
 from googleapiclient import discovery
 
 
@@ -34,3 +35,8 @@ def service_usage(credentials: Credentials):
 def cloud_billing(credentials: Credentials):
     """Cloud Billing v1 service client."""
     return discovery.build("cloudbilling", "v1", credentials=credentials, cache_discovery=False)
+
+
+def firestore_admin(credentials: Credentials):
+    """Firestore Admin v1 service client."""
+    return firestore_admin_v1.FirestoreAdminClient(credentials=credentials)

@@ -670,6 +670,35 @@ wheels = [
 ]
 
 [[package]]
+name = "google-cloud-core"
+version = "2.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "google-api-core" },
+    { name = "google-auth" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a6/03/ef0bc99d0e0faf4fdbe67ac445e18cdaa74824fd93cd069e7bb6548cb52d/google_cloud_core-2.5.0.tar.gz", hash = "sha256:7c1b7ef5c92311717bd05301aa1a91ffbc565673d3b0b4163a52d8413a186963", size = 36027, upload-time = "2025-10-29T23:17:39.513Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/89/20/bfa472e327c8edee00f04beecc80baeddd2ab33ee0e86fd7654da49d45e9/google_cloud_core-2.5.0-py3-none-any.whl", hash = "sha256:67d977b41ae6c7211ee830c7912e41003ea8194bff15ae7d72fd6f51e57acabc", size = 29469, upload-time = "2025-10-29T23:17:38.548Z" },
+]
+
+[[package]]
+name = "google-cloud-firestore"
+version = "2.21.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "google-api-core", extra = ["grpc"] },
+    { name = "google-auth" },
+    { name = "google-cloud-core" },
+    { name = "proto-plus" },
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/80/9d/027b9bf61a44422bcdcb00a2acc59152065b1cffa1fc89da62277730973e/google_cloud_firestore-2.21.0.tar.gz", hash = "sha256:0c37faa8506297f827eefc38feb155247a6dcb9a541289631015d125f1b003f8", size = 528159, upload-time = "2025-06-03T19:28:27.195Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0a/03/94755c64a2fb85cba734ac05a4f80096b8c0acfab0508c9d52c57f571687/google_cloud_firestore-2.21.0-py3-none-any.whl", hash = "sha256:bf33ccc38a27afc60748d1f9bb7c46b078d0d39d288636bdfd967611d7b3f17f", size = 368813, upload-time = "2025-06-03T19:28:25.131Z" },
+]
+
+[[package]]
 name = "google-cloud-iam"
 version = "2.20.0"
 source = { registry = "https://pypi.org/simple" }
@@ -870,6 +899,7 @@ dependencies = [
     { name = "google-auth" },
     { name = "google-cloud" },
     { name = "google-cloud-billing" },
+    { name = "google-cloud-firestore" },
     { name = "google-cloud-iam" },
     { name = "google-cloud-resource-manager" },
     { name = "google-cloud-service-usage" },
@@ -907,6 +937,7 @@ requires-dist = [
     { name = "google-auth", specifier = ">=2.42.1" },
     { name = "google-cloud", specifier = ">=0.34.0" },
     { name = "google-cloud-billing", specifier = ">=1.17.0" },
+    { name = "google-cloud-firestore", specifier = ">=2.21.0" },
     { name = "google-cloud-iam", specifier = ">=2.15.0" },
     { name = "google-cloud-resource-manager", specifier = ">=1.12.0" },
     { name = "google-cloud-service-usage", specifier = ">=1.9.0" },

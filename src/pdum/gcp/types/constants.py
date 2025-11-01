@@ -7,6 +7,7 @@ _REQUIRED_APIS: tuple[str, ...] = (
     "iam.googleapis.com",
     "serviceusage.googleapis.com",
     "cloudbilling.googleapis.com",
+    "firestore.googleapis.com",
 )
 
 __all__ = ["_REQUIRED_APIS"]
