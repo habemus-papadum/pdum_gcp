@@ -10,6 +10,7 @@ import google.api_core.operation
 import google.auth
 from google.auth.credentials import Credentials
 from google.cloud.firestore_admin_v1.types import database as gfa_database
+from google.cloud.firestore_admin_v1.types.firestore_admin import CreateDatabaseRequest
 
 from pdum.gcp._clients import cloud_billing, crm_v3, firestore_admin, service_usage
 from pdum.gcp.types.region import MultiRegion, Region
@@ -133,20 +134,19 @@ class Project(Resource):
 
         return BillingAccount(id=billing_account_id, display_name=display_name, status=status)
 
-    def bootstrap_quota_project(
+    def ensure_apis(
         self,
+        apis: Iterable[str],
         *,
         credentials: Optional[Credentials] = None,
-        required_apis: Optional[Iterable[str]] = None,
         timeout: float = 300.0,
         verbose: bool = True,
         polling_interval: float = 5.0,
     ) -> dict:
-        """Enable the required APIs for using this project as a quota project."""
+        """Ensure the given APIs are enabled for this project."""
         creds = self._get_credentials(credentials=credentials)
-
         current = set(self.enabled_apis(credentials=creds))
-        required = set(_REQUIRED_APIS if required_apis is None else required_apis)
+        required = set(apis)
         to_enable = sorted(required - current)
 
         if not to_enable:
@@ -155,6 +155,24 @@ class Project(Resource):
         return self.enable_apis(
             to_enable,
             credentials=creds,
+            timeout=timeout,
+            verbose=verbose,
+            polling_interval=polling_interval,
+        )
+
+    def bootstrap_quota_project(
+        self,
+        *,
+        credentials: Optional[Credentials] = None,
+        timeout: float = 300.0,
+        verbose: bool = True,
+        polling_interval: float = 5.0,
+    ) -> dict:
+        """Enable the required APIs for using this project as a quota project."""
+
+        return self.ensure_apis(
+            _REQUIRED_APIS,
+            credentials=credentials,
             timeout=timeout,
             verbose=verbose,
             polling_interval=polling_interval,
@@ -376,7 +394,11 @@ class Project(Resource):
             database_edition=edition,
         )
 
-        operation = client.create_database(parent=project_resource, database=new_db_object, database_id=database_id)
+        self.ensure_apis(["firestore.googleapis.com"], credentials=creds)
+        create_db_request = CreateDatabaseRequest(
+            parent=project_resource, database=new_db_object, database_id=database_id
+        )
+        operation = client.create_database(create_db_request)
 
         return operation
 
