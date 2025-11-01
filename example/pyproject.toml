@@ -1,0 +1,13 @@
+[project]
+name = "example"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fire-prox>=0.3.0",
+    "habemus-papadum-gcp",
+]
+
+[tool.uv.sources]
+habemus-papadum-gcp = { path="..", editable = true }

@@ -1,0 +1,2 @@
+#! /usr/bin/env bash
+FIRESTORE_EMULATOR_HOST=localhost:8080 uv run python -u "$@"
