@@ -324,13 +324,39 @@ class Project(Resource):
 
     def create_firestore_db(
         self,
-        database_id: str,
+        database_id: str = "(default)",
         *,
         region: Union[Region, MultiRegion],
         credentials: Optional[Credentials] = None,
         concurrency_mode=gfa_database.Database.ConcurrencyMode.OPTIMISTIC,
         edition=gfa_database.Database.DatabaseEdition.STANDARD,
     ) -> google.api_core.operation.Operation:
+        """Create a Firestore Native database for this project.
+
+        Parameters
+        ----------
+        database_id : str, default "(default)"
+            Identifier for the database. Use the special ``"(default)"`` value for the
+            primary Firestore database or supply a 4–63 character slug for additional databases.
+        region : Region or MultiRegion
+            Target region or multi-region to host the database.
+        credentials : Credentials, optional
+            Explicit credentials to use. When omitted, stored project credentials or ADC are used.
+        concurrency_mode : Database.ConcurrencyMode, optional
+            Optional concurrency mode override. Defaults to ``OPTIMISTIC`` per product guidance.
+        edition : Database.DatabaseEdition, optional
+            Firestore edition to provision. Defaults to ``STANDARD``.
+
+        Returns
+        -------
+        google.api_core.operation.Operation
+            Long-running operation representing the create database request.
+
+        Raises
+        ------
+        TypeError
+            If ``region`` is not a member of ``Region`` or ``MultiRegion``.
+        """
         creds = self._get_credentials(credentials=credentials)
         client = firestore_admin(creds)
 
