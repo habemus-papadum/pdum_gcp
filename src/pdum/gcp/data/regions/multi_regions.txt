@@ -1,0 +1,4 @@
+# MultiRegion  Description  ReadWriteRegions  WitnessRegion
+eur3	Europe	europe-west1, europe-west4	europe-north1
+nam5	United States (Central)	us-central1, us-central2	us-east1
+nam7	United States (Central and East)	us-central1, us-east4	us-central2

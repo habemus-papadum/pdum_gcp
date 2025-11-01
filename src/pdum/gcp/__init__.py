@@ -17,8 +17,10 @@ from pdum.gcp.types import (
     BillingAccount,
     Container,
     Folder,
+    MultiRegion,
     Organization,
     Project,
+    Region,
 )
 
 __version__ = "0.6.0-alpha"
@@ -40,6 +42,8 @@ __all__ = [
     "Organization",
     "Folder",
     "Project",
+    "Region",
+    "MultiRegion",
     "NO_ORG",
     "NO_BILLING_ACCOUNT",
 ]

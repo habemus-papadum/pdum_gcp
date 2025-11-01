@@ -34,4 +34,3 @@ def service_usage(credentials: Credentials):
 def cloud_billing(credentials: Credentials):
     """Cloud Billing v1 service client."""
     return discovery.build("cloudbilling", "v1", credentials=credentials, cache_discovery=False)
-

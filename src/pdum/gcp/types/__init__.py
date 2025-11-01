@@ -10,6 +10,7 @@ from .folder import Folder
 from .no_org import NO_ORG
 from .organization import Organization
 from .project import Project
+from .region import MultiRegion, Region
 from .resource import Resource
 from .role import Role
 
@@ -23,6 +24,8 @@ __all__ = [
     "NO_ORG",
     "Organization",
     "Project",
+    "Region",
+    "MultiRegion",
     "Resource",
     "Role",
 ]
