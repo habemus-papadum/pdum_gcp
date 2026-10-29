@@ -1,6 +1,6 @@
 [project]
 name = "habemus-papadum-gcp"
-version = "0.6.1"
+version = "0.6.1+dev"
 description = "Utilities and tools for Google Cloud"
 readme = "README.md"
 license = { file = "LICENSE" }

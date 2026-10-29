@@ -861,7 +861,7 @@ wheels = [
 
 [[package]]
 name = "habemus-papadum-gcp"
-version = "0.6.1"
+version = "0.6.1+dev"
 source = { editable = "." }
 dependencies = [
     { name = "backoff" },
