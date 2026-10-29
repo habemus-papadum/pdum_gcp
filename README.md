@@ -85,26 +85,40 @@ uv run ruff check --fix .
 ### Building
 
 ```bash
-# Build Python + TypeScript artifacts
+# Sync the environment the way CI does
 ./scripts/build.sh
 
 # Or build just the Python distribution artifacts
 uv build
 ```
 
-### Publishing
+### Releasing
+
+Releases run from the `release` GitHub Actions workflow, which calls
+[ship](https://github.com/habemus-papadum/pdum_ship):
 
 ```bash
-# Build and publish to PyPI (requires credentials)
-./scripts/publish.sh
+# Plan first (the default), then release for real
+gh workflow run release.yml -f bump=minor -f dry_run=true
+gh workflow run release.yml -f bump=minor -f dry_run=false
 ```
+
+Each release is tagged `habemus-papadum-gcp-v<version>` on the commit it was
+built from. Between releases `pyproject.toml` carries `<last release>+dev`;
+`ship` sets the release version, builds, tests, publishes to PyPI, tags, and
+restores the development marker. To see the plan locally:
+
+```bash
+uv run ship release habemus-papadum-gcp --bump minor --dry-run
+```
+
+Install the pre-commit hooks with `uv run pre-commit install` (`pre-commit` is
+in the dev group); `./scripts/setup.sh` does this.
 
 ### Automation scripts
 
-- `./scripts/setup.sh` – bootstrap uv, pnpm, widget bundle, and pre-commit hooks
-- `./scripts/build.sh` – reproduce the release build locally
-- `./scripts/pre-release.sh` – run the full battery of quality checks
-- `./scripts/release.sh` – orchestrate the release (creates tags, publishes to PyPI/GitHub)
+- `./scripts/setup.sh` – bootstrap uv and pre-commit hooks
+- `./scripts/build.sh` – sync the environment the way CI does
 - `./scripts/test_notebooks.sh` – execute demo notebooks (uses `./scripts/nb.sh` under the hood)
 - `./scripts/setup-visual-tests.sh` – install Playwright browsers for visual tests
 

@@ -1,6 +1,6 @@
 [project]
 name = "habemus-papadum-gcp"
-version = "0.7.0-alpha"
+version = "0.6.0+dev"
 description = "Utilities and tools for Google Cloud"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -57,7 +57,6 @@ packages = ["src/pdum"]
 
 [dependency-groups]
 dev = [
-    "hatch>=1.14.2",
     "pytest>=8.0.0",
     "pytest-cov>=7.0.0",
     "pytest-playwright>=0.5.0",
@@ -74,6 +73,7 @@ dev = [
     "pre-commit>=3.7.0",
     "watchdog>=3.0.0",
     "marimo>=0.17.3",
+    "habemus-papadum-ship>=0.6.0",
 ]
 
 [tool.ruff]
@@ -99,3 +99,9 @@ omit = [
     "*/tests/*",
     "*/testing.py",
 ]
+
+# ship releases this package: one version per package, the tag is the truth,
+# the manifest carries <last release>+dev between releases. See the README.
+[tool.ship]
+ours = ["habemus-papadum-*", "@habemus-papadum/*"]
+shared-paths = [".github/workflows/**"]

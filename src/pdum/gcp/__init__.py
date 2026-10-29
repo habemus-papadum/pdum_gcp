@@ -1,5 +1,7 @@
 """Utilities and tools for Google Cloud"""
 
+from importlib.metadata import version
+
 from pdum.gcp.admin import (
     doctor,
     get_email,
@@ -23,7 +25,7 @@ from pdum.gcp.types import (
     Region,
 )
 
-__version__ = "0.7.0-alpha"
+__version__ = version("habemus-papadum-gcp")
 
 
 __all__ = [

@@ -135,27 +135,19 @@ If you accidentally run code that mutates GCP estate:
 
 ## Important Rules
 
-### Version Management
-**NEVER modify the version number in any file.** Version numbers are managed exclusively by humans. Do not change:
-- `pyproject.toml` version field
-- `src/pdum/gcp/__init__.py` `__version__` variable
-- Any version references in documentation
+### Versions and releases
+`ship` (habemus-papadum-ship) releases this package. The manifest carries
+`<last release>+dev` between releases; never edit a version field by hand.
+`__version__` reads the installed metadata.
 
-If you think a version change is needed, inform the user but do not make the change yourself.
+To release, ask the operator. When they agree, run the release workflow:
+`gh workflow run release.yml -f bump=minor -f dry_run=false` (run with
+`dry_run=true` first to see the plan). Do not publish from this machine.
 
-### Release Management
-**ABSOLUTELY NEVER RUN THE RELEASE SCRIPT (`./scripts/release.sh`).** This is a production deployment script that:
-- Publishes the package to PyPI (affects real users)
-- Creates GitHub releases (public and permanent)
-- Pushes commits and tags to the repository
-- Triggers documentation deployment
-
-**This script should ONLY be run by a human who fully understands the consequences.** Do not:
-- Execute `./scripts/release.sh` under any circumstances
-- Suggest running it unless the user explicitly asks about the release process
-- Include it in automated workflows or scripts
-
-If the user needs to make a release, explain the process but let them run the script themselves.
+Do not commit a `path` or `editable` entry in `[tool.uv.sources]`. Do not pin
+another `habemus-papadum-*` package to an exact version without a reason on the
+same line or in `[tool.ship.pins]`. Run `uv run ship deps check` before you
+finish.
 
 ## Style & Testing Principles (Quick)
 
@@ -289,10 +281,13 @@ uv run ruff format .
 uv run ruff check --fix .
 ```
 
-### Publishing
+### Releasing
 ```bash
-# Build and publish to PyPI (requires credentials)
-./scripts/publish.sh
+# Plan a release (operators run the real one through the release workflow)
+uv run ship release habemus-papadum-gcp --bump minor --dry-run
+
+# Check the release policy: development links, lockfile, pins, version marker
+uv run ship deps check
 ```
 
 ## Architecture
@@ -306,7 +301,7 @@ uv run ruff check --fix .
 ### Key Constraints
 - **Python Version**: Requires Python 3.12+
 - **Dependency Management**: Uses UV exclusively; uv.lock is committed
-- **Build System**: Uses Hatch/Hatchling for building distributions
+- **Build System**: Hatchling builds distributions; `ship` runs the build at release time
 
 ### Code Standards
 - **Ruff Configuration**:
@@ -493,17 +488,18 @@ The project uses GitHub Actions for CI (`.github/workflows/ci.yml`):
 - Runs on every push to main and pull requests
 - Executes linting with ruff
 - Runs unit tests with coverage reporting
+- Runs `ship deps check` (development links, lockfile, version marker)
 - Posts coverage report as a PR comment
 
 ### Release Process
-Releases are managed by the `./scripts/release.sh` script (HUMANS ONLY):
-1. Validates git repo is clean
-2. Checks version has `-alpha` suffix
-3. Runs all validation (tests, linting)
-4. Strips `-alpha` from version for release
-5. Creates release commit and tag
-6. Publishes to PyPI
-7. Creates GitHub release
-8. Bumps to next development version with `-alpha`
+Releases run from the `release` workflow (`.github/workflows/release.yml`),
+which calls the reusable workflow in `habemus-papadum/pdum_ship`. It waits for
+`ci.yml` to pass on the same commit, then runs `ship release habemus-papadum-gcp`:
+1. Reads the last tag `habemus-papadum-gcp-v<version>` and applies the requested bump
+2. Writes the release version into `pyproject.toml` and re-locks
+3. Builds, runs the tests, publishes to PyPI with the `PYPI_API_TOKEN` secret
+4. Commits, tags `habemus-papadum-gcp-v<version>`, pushes commit and tag together
+5. Creates the GitHub release
+6. Writes `<version>+dev` back and pushes
 
-The release script expects versions to follow the pattern: `X.Y.Z-alpha` → `X.Y.Z` → `X.Y.(Z+1)-alpha`
+Versions follow `X.Y.Z+dev` -> `X.Y.Z` (tagged) -> `X.Y.Z+dev`.
