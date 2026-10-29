@@ -38,3 +38,4 @@ jobs:
     permissions:
       contents: write
       actions: read
+      id-token: write   # the reusable workflow's job requests it (npm provenance)
