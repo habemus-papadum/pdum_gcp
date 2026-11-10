@@ -50,3 +50,8 @@ The original frozen-lock baseline passed 44 Python tests with 19 existing opt-in
 The first-party resolution was already current, so the job made no empty commit and created no repair PR. Future candidate failures still use the shared draft-PR/report path; this run exercised the no-change path.
 
 The shared action's failed-candidate draft-PR path was separately exercised in its [integration smoke](https://github.com/habemus-papadum/pdum_ship/actions/runs/42859986953). Repository-level Actions PR creation is enabled; the default token permission remains read unless a workflow explicitly requests more.
+
+Ordinary adoption CI initially failed before tests because the locked Playwright
+browser installer does not support the new Ubuntu 26.04 `ubuntu-latest` image.
+That browser CI job now selects supported Ubuntu 24.04 explicitly. No browser
+package version, test assertion or weekly verification command was changed.

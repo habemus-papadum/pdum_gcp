@@ -15,7 +15,8 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # The locked Playwright browser installer supports Ubuntu 24, not the moving 26.04 image.
+    runs-on: ubuntu-24.04
     permissions:
       pull-requests: write
       contents: write
